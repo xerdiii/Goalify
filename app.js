@@ -24,7 +24,7 @@ const sb = createClient(SUPABASE_URL, SUPABASE_ANON, {
 // ============================================================
 // DEMO MODE — set to false when auth is ready
 // ============================================================
-const DEMO_MODE = false;
+const DEMO_MODE = true;
 // Use the real OpenAI-backed Edge Function (key stays on Supabase, never here).
 // If the function isn't deployed yet, the app gracefully falls back to sample replies.
 const USE_REAL_AI = true;
