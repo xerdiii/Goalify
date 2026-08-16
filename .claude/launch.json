@@ -3,8 +3,12 @@
   "configurations": [
     {
       "name": "goalify-static",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "5173"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "C:\\Users\\erdit\\AppData\\Local\\Temp\\claude\\E--goalify\\05f5c63a-8798-44b1-bb6f-cd89871717e1\\scratchpad\\static-server.js",
+        "C:\\projects\\goalify",
+        "5173"
+      ],
       "port": 5173
     }
   ]

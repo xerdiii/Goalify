@@ -77,11 +77,15 @@ const PRICING={pro:{mo:3,yr:29},premium:{mo:5,yr:49},business:{mo:9,yr:75}};
 // referral reward tiers
 const REWARD_TIERS=[[25,'3 months of Pro free']];
 const PLAN_ORDER=['free','pro','premium','business'];
-// ⚠️ DEMO-ONLY: these live in client code and are readable in page source.
-// Move to server-side (edge function / DB) validation before launch.
-const PROMO_CODES={'FORESTPRO2026-FP2-PRP':'pro','FORESTPREMIUM2026-FP6-PP':'premium','FORESTBUSINESS2026-FB2-BP':'business'};
-const ADMIN_CODE='ADMINFOREST2010-AF2-ADM';
-function isDemoAdmin(){return localStorage.getItem('goalify_admin')==='1';}
+// Demo-only stand-ins. Real redemption is server-side: the code list, the
+// single-use rule and the plan write all live in the database behind the
+// redeem_promo() RPC (supabase/migration-2026-08-plan-security.sql), so no
+// working code or admin secret is shipped to the browser.
+const DEMO_PROMO_CODES={'DEMOPRO':'pro','DEMOPREMIUM':'premium','DEMOBUSINESS':'business'};
+const DEMO_ADMIN_CODE='DEMOADMIN';
+// Admin is DB-backed (profiles.role, immutable to clients). The localStorage
+// flag is a demo convenience only and grants nothing in production.
+function isDemoAdmin(){return DEMO_MODE&&localStorage.getItem('goalify_admin')==='1';}
 const PLAN_FEATURES={
   free:['Up to 3 goals (archive, no delete)','Basic goal tracking','Basic profile & sharing','Follow / unfollow people','Simple, distraction-free'],
   pro:['Unlimited goals','Advanced analytics & insights','Future Simulator','Focused pro dashboard','One signature red theme'],
@@ -1310,7 +1314,7 @@ function landingTestimonials(){
     <div class="mx-auto max-w-2xl text-center reveal">
       <p class="lp-kicker gtext">Built for people like you</p>
       <h2 class="lp-h2 mt-3">Money lives, three ways</h2>
-      <p class="lp-lead mt-4">Goalify is newly launched — these are representative personas that show who it's built for and how it fits real routines.</p>
+      <p class="lp-lead mt-4">Goalify is newly launched, so these are representative personas rather than customer stories. They show who it's built for.</p>
     </div>
     <div class="mt-12 grid gap-6 lg:grid-cols-3">
       ${T.map((t,i)=>`<figure class="lp-tst reveal" style="transition-delay:${i*0.06}s">
@@ -1328,7 +1332,7 @@ function landingComparison(){
     <div class="mx-auto max-w-2xl text-center reveal">
       <p class="lp-kicker gtext">Why Goalify</p>
       <h2 class="lp-h2 mt-3">Better than a spreadsheet or your bank app</h2>
-      <p class="lp-lead mt-4">Honestly compared — here's where each one lands.</p>
+      <p class="lp-lead mt-4">An honest look at where each one actually lands.</p>
     </div>
     <div class="lp-cmp reveal">
       <div class="lp-cmp-col win"><div class="lp-cmp-h">${ICON('goal','ic-sm')} Goalify <span class="lp-cmp-badge">You are here</span></div><div class="lp-cmp-list">
@@ -1353,7 +1357,7 @@ function landingTeaser(){
     <div class="mx-auto max-w-2xl text-center reveal">
       <p class="lp-kicker gtext">Try it now</p>
       <h2 class="lp-h2 mt-3">See your first goal in 3 taps</h2>
-      <p class="lp-lead mt-4">No sign-up needed — get a live projection, then start free with it pre-filled.</p>
+      <p class="lp-lead mt-4">No sign-up needed. You get a live projection, and if you like it your free account starts pre-filled.</p>
     </div>
     <div class="lt reveal mt-10"><div class="lt-grid">
       <div>
@@ -1435,7 +1439,7 @@ function landing(){
         <div class="reveal flex flex-col items-center">
           <span class="lp-eyebrow"><span class="dot"></span> Your money, finally on your side</span>
           <h1 class="lp-h1 lp-h1-glow mt-5"><span>Turn every euro</span> <span>into</span> <span class="gtext lp-glow">progress.</span></h1>
-          <p class="lp-lead mt-4 max-w-md mx-auto">Goalify makes saving something you look forward to — track spending in seconds, build streaks that stick, and reach every goal faster.</p>
+          <p class="lp-lead mt-4 max-w-md mx-auto">Saving stops feeling like restriction once you can see it working. Log spending in seconds, keep a streak alive, and watch the date on your goal move closer.</p>
           <div class="mt-7 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
             <a href="${cta}" class="btn btn-primary lp-btn-lg">Start for free →</a>
             <a href="#home" data-scroll="how" class="btn btn-ghost lp-btn-lg">See how it works</a>
@@ -1493,7 +1497,7 @@ function landing(){
       <div class="mx-auto max-w-2xl text-center reveal">
         <p class="lp-kicker" style="color:var(--jade2)">Built for how you save</p>
         <h2 class="lp-h2 mt-3">Made for real money lives</h2>
-        <p class="lp-lead mt-4">Different goals, same engine — a clear plan, honest numbers, and momentum you can feel.</p>
+        <p class="lp-lead mt-4">Different goals, same engine underneath: a dated plan, and numbers that don't flatter you.</p>
       </div>
       <div class="mt-14 grid gap-6 lg:grid-cols-3">
         ${[
@@ -1510,7 +1514,7 @@ function landing(){
       <div class="mx-auto max-w-2xl text-center reveal">
         <p class="lp-kicker" style="color:var(--steel2)">Privacy &amp; security</p>
         <h2 class="lp-h2 mt-3">Your money data, on lockdown</h2>
-        <p class="lp-lead mt-4">Specific protections — not vague promises.</p>
+        <p class="lp-lead mt-4">Specific protections, not vague promises.</p>
       </div>
       <div class="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         ${[['shield','Row-level security','Every row in the database is scoped to your account — other users can never query your data.'],['encrypt','Encrypted in transit','All traffic between your device and our infrastructure runs over HTTPS/TLS.'],['export','Export &amp; delete anytime','One click exports your data; deleting your account removes it permanently.'],['noads','No ads, no data selling','Goalify is funded by plans — never by selling your behaviour to advertisers.']].map((t,i)=>`<div class="lp-sec-tile reveal" style="transition-delay:${i*0.05}s"><span class="lp-ico" style="color:var(--steel2);background:color-mix(in srgb,var(--steel) 16%,transparent)">${ICON(t[0])}</span><h3 class="mt-3 font-bold">${t[1]}</h3><p class="mt-1 text-sm leading-relaxed" style="color:var(--muted)">${t[2]}</p></div>`).join('')}
@@ -3529,7 +3533,7 @@ function settingsView(){
 // ADMIN
 // ============================================================
 function adminDemoView(){
-  const codes=Object.entries(PROMO_CODES),used=JSON.parse(localStorage.getItem('goalify_promo_used')||'[]');
+  const codes=Object.entries(DEMO_PROMO_CODES),used=JSON.parse(localStorage.getItem('goalify_promo_used')||'[]');
   const pendingChals=chalState().filter(c=>c.status==='pending');
   return `<div class="mx-auto max-w-6xl px-4 py-8"><div class="mb-8 flex items-center justify-between"><div class="flex items-center gap-3">${brand('#admin',{dark:true})}<span class="rounded-full bg-amber-400/20 px-2.5 py-1 text-xs font-medium text-amber-300">Admin</span></div><div class="flex items-center gap-3 text-sm"><a href="#app/dashboard" class="text-slate-400 hover:text-white">← App</a><button class="btn btn-ghost !py-2 text-sm" data-action="adminLogout">Sign out admin</button></div></div>
   <div class="glass rounded-2xl p-5 mb-6" style="border:1px solid var(--accent2)"><p class="text-sm">⚠️ <b>Demo admin.</b> Real users, subscriptions and verification requests appear here once the Supabase backend is live and people sign up. The data below reads your local demo state.</p></div>
@@ -4276,13 +4280,41 @@ document.addEventListener('click',async(e)=>{
     else if(act==='setColor'){applyTheme(null,a.getAttribute('data-color'));if(!DEMO_MODE){await sb.from('profiles').update({theme_color:ME.theme_color}).eq('id',SESSION.user.id);}render();}
     else if(act==='setBg'){applyBg(a.getAttribute('data-bg'));if(!DEMO_MODE){await sb.from('profiles').update({bg:ME.bg}).eq('id',SESSION.user.id);}render();}
     else if(act==='setVisibility'){const v=a.getAttribute('data-v');localStorage.setItem('goalify_visibility',v);if(ME)ME.profile_visibility=v;if(!DEMO_MODE){await sb.from('profiles').update({profile_visibility:v}).eq('id',SESSION.user.id).catch(()=>{});}toast(v==='public'?'Profile is now public':'Profile is now private');render();}
-    else if(act==='prestige'){const level=levelFromXp(ME.xp).level;if(!canPrestige(level)){toast('Reach Level 100 to prestige','err');return;}const np=(ME.prestige||0)+1;if(DEMO_MODE){DEMO_ME.prestige=np;DEMO_ME.xp=0;ME.prestige=np;ME.xp=0;}else{await sb.from('profiles').update({prestige:np,xp:0}).eq('id',SESSION.user.id).catch(()=>{});await loadProfile();}toast('🌟 Prestige '+np+'! A fresh climb begins.');render();}
+    else if(act==='prestige'){const level=levelFromXp(ME.xp).level;if(!canPrestige(level)){toast('Reach Level 100 to prestige','err');return;}
+      if(DEMO_MODE){const np=(ME.prestige||0)+1;DEMO_ME.prestige=np;DEMO_ME.xp=0;ME.prestige=np;ME.xp=0;toast('🌟 Prestige '+np+'! A fresh climb begins.');render();return;}
+      // The Level-100 gate is re-checked server-side; the client check above is
+      // only there to avoid a pointless round trip.
+      try{
+        const {data,error}=await sb.rpc('prestige_up');
+        if(error)throw error;
+        if(!data?.ok)return toast(data?.error||'Not eligible to prestige yet','err');
+        await loadProfile();
+        toast('🌟 Prestige '+data.prestige+'! A fresh climb begins.');render();
+      }catch(err){toast(friendlyErr(err,'Could not prestige right now'),'err');}
+    }
     else if(act==='demoPlan'){const pl=a.getAttribute('data-plan');const cyc=a.getAttribute('data-cycle')||'monthly';if(DEMO_MODE){DEMO_ME.plan=pl;ME.plan=pl;if(pl!=='free'){location.hash='#payment-success?plan='+pl+'&cycle='+cyc;}else{toast('Now on the Free plan (demo)');render();}}else{toast('Upgrades are handled by an admin or via student verification.');}}
-    else if(act==='redeemPromo'){const code=($('#promoInput')?.value||'').trim().toUpperCase();if(!code)return toast('Enter a code','err');const plan=PROMO_CODES[code];if(!plan)return toast('Invalid or expired code','err');const used=JSON.parse(localStorage.getItem('goalify_promo_used')||'[]');if(used.includes(code))return toast('This code has already been used','err');used.push(code);localStorage.setItem('goalify_promo_used',JSON.stringify(used));if(DEMO_MODE){DEMO_ME.plan=plan;ME.plan=plan;}else{await sb.from('profiles').update({plan}).eq('id',SESSION.user.id);await loadProfile();}toast('🎉 '+PLANS[plan].name+' plan activated!');render();}
+    else if(act==='redeemPromo'){const code=($('#promoInput')?.value||'').trim().toUpperCase();if(!code)return toast('Enter a code','err');
+      if(DEMO_MODE){const plan=DEMO_PROMO_CODES[code];if(!plan)return toast('Invalid or expired code','err');DEMO_ME.plan=plan;ME.plan=plan;toast('🎉 '+PLANS[plan].name+' plan activated!');render();return;}
+      // Validated server-side: the code list, single-use rule and plan write all
+      // live in the database (see supabase/migration-2026-08-plan-security.sql).
+      const btn=a;btn.disabled=true;
+      try{
+        const {data,error}=await sb.rpc('redeem_promo',{p_code:code});
+        if(error)throw error;
+        if(!data?.ok)return toast(data?.error||'Invalid or expired code','err');
+        await loadProfile();
+        toast('🎉 '+PLANS[data.plan].name+' plan activated!');render();
+      }catch(err){toast(friendlyErr(err,'Could not redeem that code'),'err');}
+      finally{btn.disabled=false;}
+    }
     else if(act==='togglePmForm'){const el=$('#pmForm');if(el)el.classList.toggle('hidden');}
     else if(act==='savePm'){const brand=$('#pmBrand')?.value||'Card';const last4=($('#pmLast4')?.value||'').replace(/\D/g,'');const exp=($('#pmExp')?.value||'').trim();if(last4.length!==4)return toast('Enter the last 4 digits','err');if(!/^\d{2}\/\d{2}$/.test(exp))return toast('Expiry must be MM/YY','err');setPM({brand,last4,exp});toast('💳 Payment method saved');render();}
     else if(act==='removePm'){setPM(null);toast('Payment method removed');render();}
-    else if(act==='adminLogin'){const code=($('#adminInput')?.value||'').trim();if(code!==ADMIN_CODE)return toast('Incorrect access code','err');localStorage.setItem('goalify_admin','1');toast('🛡️ Admin access granted');location.hash='#admin';}
+    else if(act==='adminLogin'){
+      // Production admin comes from profiles.role, which clients cannot write.
+      if(!DEMO_MODE)return toast('Admin access is granted from the database, not a code.','err');
+      const code=($('#adminInput')?.value||'').trim();if(code!==DEMO_ADMIN_CODE)return toast('Incorrect access code','err');
+      localStorage.setItem('goalify_admin','1');toast('🛡️ Demo admin access granted');location.hash='#admin';}
     else if(act==='adminLogout'){localStorage.removeItem('goalify_admin');toast('Admin signed out');render();}
     else if(act==='simPreset'){simPreset(a.getAttribute('data-preset'));}
     else if(act==='scPreset'){const k=a.getAttribute('data-key');SC_PRESET=k;const pr=SC_PRESETS.find(p=>p.key===k)||SC_PRESETS[0];const nameEl=document.getElementById('scName');const priceEl=document.getElementById('scPrice');const timesEl=document.getElementById('scTimes');if(nameEl)nameEl.value=pr.label;if(priceEl)priceEl.value=Math.round((priceFor(pr.key)||2)*100)/100;if(timesEl)timesEl.value=Math.max(1,freqFor(pr.key)||1);document.querySelectorAll('[data-action="scPreset"]').forEach(b=>{const sel=b.getAttribute('data-key')===k;b.style.background=sel?'linear-gradient(135deg,var(--accent1),var(--accent2))':'var(--glass)';b.style.color=sel?'#fff':'var(--muted)';});updateSpendCalc();}
