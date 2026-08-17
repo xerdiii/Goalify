@@ -226,6 +226,40 @@
     .rec-list>*:nth-child(2){animation-delay:.04s}.rec-list>*:nth-child(3){animation-delay:.08s}
     .rec-list>*:nth-child(4){animation-delay:.12s}.rec-list>*:nth-child(5){animation-delay:.16s}
     .rec-list>*:nth-child(6){animation-delay:.20s}.rec-list>*:nth-child(n+7){animation-delay:.24s}
+    /* category glyphs + toast icon: keep icons optically aligned with text */
+    .cat-ic{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+    .toast-in{display:inline-flex;align-items:center;gap:.5rem}
+    .toast-in svg{flex-shrink:0;opacity:.9}
+    .auth-bi svg,.lp-ico svg{display:block}
+    /* hero mockup: icons sit inline with their labels */
+    .ds-streak svg,.ds-goal-n svg,.ds-mini svg,.ds-badge svg{display:inline-block;vertical-align:-2px}
+    .ds-coach-ic svg{display:block}
+    .ds-mini>span,.ds-badge{display:inline-flex;align-items:center;gap:.3rem}
+    .ds-tx-ic svg,.pm-nav-i svg{display:block}
+    .ds-tx-ic{display:inline-flex;align-items:center;justify-content:center}
+    .pm-nav-i{display:inline-flex;align-items:center;justify-content:center}
+    .pm-hi svg,.pm-goal-n svg{display:inline-block;vertical-align:-2px}
+    /* Premium · safe-to-spend */
+    .sts-num{font-size:clamp(2.2rem,5vw,3rem);font-weight:800;letter-spacing:-.03em;line-height:1.05;margin-top:.15rem}
+    .sts-break{display:grid;gap:.3rem;font-size:.82rem;min-width:11rem}
+    .sts-break>div{display:flex;justify-content:space-between;gap:1.2rem}
+    /* Premium · bill calendar */
+    .bc-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:.28rem}
+    .bc-day{position:relative;min-height:3.1rem;border-radius:.55rem;padding:.3rem .35rem;border:1px solid var(--hair);
+      background:color-mix(in srgb,var(--text) 2.5%,transparent);display:flex;flex-direction:column;gap:.1rem}
+    .bc-d{font-size:.68rem;color:var(--muted)}
+    .bc-amt{font-size:.66rem;font-weight:700;line-height:1.15;word-break:break-word}
+    .bc-day.has-bill{border-color:color-mix(in srgb,var(--accent2) 45%,var(--border));
+      background:color-mix(in srgb,var(--accent2) 12%,transparent)}
+    .bc-day.is-today{box-shadow:0 0 0 2px var(--accent2)}
+    .bc-day.is-past{opacity:.42}
+    @media(max-width:420px){.bc-day{min-height:2.6rem}.bc-amt{font-size:.6rem}}
+    /* Premium · what-if */
+    .wi-chip{cursor:pointer;border:1px solid var(--border);transition:border-color .18s,background .18s,transform .12s}
+    .wi-chip:hover{border-color:var(--accent2)}
+    .wi-chip:active{transform:scale(.97)}
+    .wi-chip.on{background:color-mix(in srgb,var(--accent2) 18%,transparent);border-color:var(--accent2);color:var(--text)}
+    .wi-out{border-top:1px solid var(--hair);padding-top:.7rem}
     /* monthly category budgets */
     .bud-row{border:1px solid var(--hair);border-radius:var(--r-md);padding:.7rem .8rem;background:color-mix(in srgb,var(--text) 2.5%,transparent)}
     .bud-track{height:7px;border-radius:9999px;background:color-mix(in srgb,var(--text) 10%,transparent);overflow:hidden}

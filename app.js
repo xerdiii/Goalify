@@ -111,7 +111,7 @@ function isDemoAdmin(){return DEMO_MODE&&localStorage.getItem('goalify_admin')==
 const PLAN_FEATURES={
   free:['Up to 3 goals (archive, no delete)','Basic goal tracking','Basic profile & sharing','Follow / unfollow people','Simple, distraction-free'],
   pro:['Unlimited goals','Advanced analytics & insights','Future Simulator','Focused pro dashboard','One signature red theme'],
-  premium:['Everything in Pro','Full social: feed, reactions, memories','Themes, banners & chat wallpapers','Smart insights & reminders','Weekly & monthly reports','Streaks, challenges & badges'],
+  premium:['Everything in Pro','Safe-to-spend, updated live','Bill calendar for the month ahead','What-if: turn a habit into a date','Full social: feed, reactions, memories','Themes, banners & chat wallpapers','Streaks, challenges & badges'],
   business:['A complete business OS','Companies, employees & assets','Invoices, payments & taxes','Cash flow, net worth & reports','Executive gold interface','No games — pure operations'],
 };
 // ── central capability map: the single source of truth for plan gating ──
@@ -136,6 +136,10 @@ function caps(plan){
     recurringLimit: paid?-1:3,     // free sees its 3 biggest repeat charges
     budgetLimit: paid?-1:2,        // free can cap 2 categories
     csvExport: paid,               // spreadsheet export is a Pro convenience
+    // ── Premium-only. Pro is "no limits"; Premium is "the app works for you". ──
+    safeToSpend: plan==='premium'||plan==='business',  // live daily allowance
+    billCalendar: plan==='premium'||plan==='business', // month-ahead cash timeline
+    whatIf: plan==='premium'||plan==='business',       // instant trade-off answers
   };
 }
 // Chart timeframe switcher. Free is capped to the last month of history; the
@@ -558,13 +562,17 @@ function planNav(plan){
 }
 
 
+// `i` is an ICON_PATHS key; catIcon() renders it. The old `e` emoji are gone —
+// line icons keep the interface consistent with the rest of the nav and chrome.
 const CATS={
-  groceries:{l:'Groceries',c:'#22c55e',e:'🛒'}, gas:{l:'Gas/Fuel',c:'#f59e0b',e:'⛽'}, shopping:{l:'Shopping',c:'#ec4899',e:'🛍️'},
-  restaurants:{l:'Restaurants',c:'#fb923c',e:'🍽️'}, fastfood:{l:'Fast Food',c:'#f97316',e:'🍔'}, cigarettes:{l:'Cigarettes',c:'#a3a3a3',e:'🚬'},
-  entertainment:{l:'Entertainment',c:'#a855f7',e:'🎬'}, subscriptions:{l:'Subscriptions',c:'#6366f1',e:'🔁'}, transportation:{l:'Transportation',c:'#3b82f6',e:'🚌'},
-  rent:{l:'Rent',c:'#8b5cf6',e:'🏠'}, utilities:{l:'Utilities',c:'#06b6d4',e:'💡'}, education:{l:'Education',c:'#eab308',e:'📚'},
-  other:{l:'Other',c:'#94a3b8',e:'📦'}, income:{l:'Income',c:'#4ade80',e:'💵'}, savings:{l:'Savings',c:'#10b981',e:'💰'},
+  groceries:{l:'Groceries',c:'#22c55e',i:'cat-groceries'}, gas:{l:'Gas/Fuel',c:'#f59e0b',i:'cat-gas'}, shopping:{l:'Shopping',c:'#ec4899',i:'cat-shopping'},
+  restaurants:{l:'Restaurants',c:'#fb923c',i:'cat-restaurants'}, fastfood:{l:'Fast Food',c:'#f97316',i:'cat-fastfood'}, cigarettes:{l:'Cigarettes',c:'#a3a3a3',i:'cat-cigarettes'},
+  entertainment:{l:'Entertainment',c:'#a855f7',i:'cat-entertainment'}, subscriptions:{l:'Subscriptions',c:'#6366f1',i:'cat-subscriptions'}, transportation:{l:'Transportation',c:'#3b82f6',i:'cat-transportation'},
+  rent:{l:'Rent',c:'#8b5cf6',i:'cat-rent'}, utilities:{l:'Utilities',c:'#06b6d4',i:'cat-utilities'}, education:{l:'Education',c:'#eab308',i:'cat-education'},
+  other:{l:'Other',c:'#94a3b8',i:'cat-other'}, income:{l:'Income',c:'#4ade80',i:'cat-income'}, savings:{l:'Savings',c:'#10b981',i:'cat-savings'},
 };
+// A category glyph tinted with the category's own colour.
+function catIcon(key,cls){const c=CATS[key]||CATS.other;return `<span class="cat-ic" style="color:${c.c}">${ICON(c.i,cls||'ic-sm')}</span>`;}
 const QUIZ_CATS=['groceries','gas','shopping','restaurants','fastfood','cigarettes','entertainment','subscriptions','transportation','rent','utilities','education','other'];
 
 const PERSONAS={
@@ -658,7 +666,10 @@ const ini=(p)=>((p?.first_name||p?.email||'U')[0]+(p?.last_name?.[0]||'')).toUpp
 function toast(msg,type='ok'){ const el=document.getElementById('toast'); if(!el)return;
   // errors show quietly (neutral pill, no alarm-red) and never dump raw internals on the user
   const c=type==='err'?'background:rgba(44,44,48,.96);border:1px solid rgba(255,255,255,.14)':'background:rgba(16,185,129,.95)';
-  el.innerHTML=`<div class="toast text-white anim" style="${c}">${esc(msg)}</div>`; setTimeout(()=>{el.innerHTML='';},type==='err'?2600:3200); }
+  // the type already says success/failure, so a status icon carries it — no
+  // decorative emoji baked into the message strings
+  const ic=ICON(type==='err'?'alert':'check','ic-sm');
+  el.innerHTML=`<div class="toast text-white anim" style="${c}"><span class="toast-in">${ic}<span>${esc(msg)}</span></span></div>`; setTimeout(()=>{el.innerHTML='';},type==='err'?2600:3200); }
 // turn raw Supabase/network errors into friendly, actionable messages
 function friendlyErr(error,fallback){
   const m=((error&&error.message)||'').toLowerCase();
@@ -1118,6 +1129,27 @@ const ICON_PATHS={
   chart:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   repeat:'<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
   download:'<path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/>',
+  alert:'<path d="M12 8v5"/><circle cx="12" cy="16.5" r=".9" fill="currentColor" stroke="none"/><path d="M10.3 3.9 2.5 17.4A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3.1L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
+  briefcase:'<rect x="3" y="7.5" width="18" height="12.5" rx="2"/><path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5"/><path d="M3 13h18"/>',
+  sparkle:'<path d="M12 3.5 13.7 9l5.3 1.7-5.3 1.7L12 18l-1.7-5.6L5 10.7 10.3 9z"/><path d="M18.5 4v3M20 5.5h-3"/>',
+  shield:'<path d="M12 3l7.5 3v5.5c0 4.4-3.1 8.3-7.5 9.5-4.4-1.2-7.5-5.1-7.5-9.5V6z"/>',
+  gift:'<rect x="3" y="9" width="18" height="11" rx="2"/><path d="M3 13h18"/><path d="M12 9v11"/><path d="M12 9C10.5 6.5 9 5 7.5 5a2 2 0 0 0 0 4"/><path d="M12 9c1.5-2.5 3-4 4.5-4a2 2 0 0 1 0 4"/>',
+  // ── spending categories ──
+  'cat-groceries':'<path d="M3 5h2l2.2 10.4a2 2 0 0 0 2 1.6h7.4a2 2 0 0 0 2-1.55L20.5 8H6"/><circle cx="10" cy="20" r="1.2"/><circle cx="17" cy="20" r="1.2"/>',
+  'cat-gas':'<path d="M4 20V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v15"/><path d="M3 20h11"/><path d="M13 10h3.5a2 2 0 0 1 2 2v4a1.5 1.5 0 0 0 3 0V9l-2.5-2.5"/>',
+  'cat-shopping':'<path d="M5 8h14l-1.2 11.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>',
+  'cat-restaurants':'<path d="M6 3v8a2.5 2.5 0 0 0 5 0V3"/><path d="M8.5 11v10"/><path d="M17.5 3c-1.6 1-2.5 2.8-2.5 5s.9 3.4 2.5 3.6V21"/>',
+  'cat-fastfood':'<path d="M4 11a8 8 0 0 1 16 0z"/><path d="M3 15h18"/><path d="M5 19h14a2 2 0 0 0 2-2H3a2 2 0 0 0 2 2z"/>',
+  'cat-cigarettes':'<path d="M3 16h14v4H3z"/><path d="M19 16h2v4h-2z"/><path d="M17 12c1.6-.8 2-1.6 2-2.6S18.4 7.6 17 7"/><path d="M20.5 12c1-.9 1.5-1.9 1.5-3s-.5-2.2-1.5-3"/>',
+  'cat-entertainment':'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5l5 2.5-5 2.5z"/>',
+  'cat-subscriptions':'<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+  'cat-transportation':'<rect x="4" y="4" width="16" height="12" rx="2"/><path d="M4 11h16"/><path d="M7 20v-4M17 20v-4"/><circle cx="8" cy="18" r="1"/><circle cx="16" cy="18" r="1"/>',
+  'cat-rent':'<path d="M4 11l8-6.5L20 11"/><path d="M6 10v10h12V10"/><path d="M10 20v-5h4v5"/>',
+  'cat-utilities':'<path d="M9.5 21h5"/><path d="M10 18h4"/><path d="M12 3a6 6 0 0 1 3.5 10.9c-.4.3-.5.7-.5 1.1H9c0-.4-.1-.8-.5-1.1A6 6 0 0 1 12 3z"/>',
+  'cat-education':'<path d="M2 8.5 12 4l10 4.5-10 4.5z"/><path d="M6 11v5c0 1.4 2.7 2.6 6 2.6s6-1.2 6-2.6v-5"/>',
+  'cat-other':'<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M3 11h18"/><path d="M12 7V4"/>',
+  'cat-income':'<path d="M12 21V7"/><path d="M7 12l5-5 5 5"/><path d="M4 3h16"/>',
+  'cat-savings':'<path d="M12 21a8 8 0 0 0 8-8c0-4-3-7-8-10C7 6 4 9 4 13a8 8 0 0 0 8 8z"/><path d="M12 16v-5"/><path d="M10 13h4"/>',
   bolt:'<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" stroke-linejoin="round"/>',
   trophy:'<path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M7 6H4v2a3 3 0 0 0 3 3M17 6h3v2a3 3 0 0 1-3 3M9 20h6M10 20l.5-4M14 20l-.5-4"/>',
   lock:'<rect x="4.5" y="10" width="15" height="10" rx="2.2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
@@ -1232,16 +1264,16 @@ function landingPreview(){
 // startDashboardShowcase() counts the numbers up. Respects reduced motion. ──
 function dashboardShowcase(){
   const stat=(l,v,sub,cls)=>`<div class="ds-stat"><span class="ds-stat-l">${l}</span><span class="ds-stat-v ${cls||''}" data-count="${v.replace(/[^0-9.]/g,'')}" data-pre="${/€/.test(v)?'€':''}" data-suf="${/%/.test(v)?'%':''}">${v}</span>${sub?`<span class="ds-stat-s ${cls||''}">${sub}</span>`:''}</div>`;
-  const tx=[['🛒','Groceries','2h ago','-28.40','out'],['☕','Coffee','5h ago','-4.20','out'],['🎮','Steam','Yesterday','-12.99','out'],['💰','Salary','2d ago','+1,250','in']];
+  const tx=[['cat-groceries','Groceries','2h ago','-28.40','out'],['cat-restaurants','Coffee','5h ago','-4.20','out'],['cat-entertainment','Steam','Yesterday','-12.99','out'],['cat-income','Salary','2d ago','+1,250','in']];
   const bars=[['Food',82],['Transport',45],['Fun',60],['Shop',38],['Bills',70],['Save',55]];
-  const ach=[['🏆','First Goal'],['🔥','7-Day Streak'],['💰','Saved €500'],['🎓','Student Pro']];
-  const mini=[['🛡️','Emergency Fund',74],['✈️','Vacation',42],['🎮','Gaming PC',19]];
+  const ach=[['trophy','First Goal'],['bolt','7-Day Streak'],['cat-savings','Saved €500'],['cat-education','Student Pro']];
+  const mini=[['shield','Emergency Fund',74],['cat-transportation','Vacation',42],['cat-entertainment','Gaming PC',19]];
   const lb=[['1','Emma','183','E'],['2','Alex','151','A'],['3','You','148','Y']];
   const R=26,C=(2*Math.PI*R).toFixed(1),off=(C*(1-0.74)).toFixed(1);
   return `<div class="ds" style="--ds-C:${C}">
     <div class="ds-head ds-fade">
-      <div><p class="ds-hi">Good morning, Alex 👋</p><p class="ds-sub">You're <b class="ds-ahead">€148 ahead</b> of your monthly budget.</p></div>
-      <span class="ds-streak">🔥 <b>8</b> day streak</span>
+      <div><p class="ds-hi">Good morning, Alex</p><p class="ds-sub">You're <b class="ds-ahead">€148 ahead</b> of your monthly budget.</p></div>
+      <span class="ds-streak">${ICON('bolt','ic-xs')} <b>8</b> day streak</span>
     </div>
     <div class="ds-stats ds-fade">
       ${stat("Today's spending",'€28.40','● below budget','ok')}
@@ -1253,38 +1285,38 @@ function dashboardShowcase(){
       <div class="ds-col">
         <div class="ds-card ds-goal ds-fade">
           <div class="ds-ring"><svg viewBox="0 0 60 60"><circle class="ds-ring-bg" cx="30" cy="30" r="${R}"/><circle class="ds-ring-fg" cx="30" cy="30" r="${R}" stroke-dasharray="${C}" stroke-dashoffset="${off}"/></svg><span class="ds-ring-c" data-count="74" data-suf="%">74%</span></div>
-          <div class="ds-goal-info"><p class="ds-goal-n">🛡️ Emergency Fund</p><p class="ds-goal-amt"><b data-count="1480" data-pre="€">€1,480</b> <span>/ €2,000</span></p><p class="ds-goal-eta">Est. completion <b>April 12</b> <span class="ds-badge-ok">Ahead of schedule</span></p></div>
+          <div class="ds-goal-info"><p class="ds-goal-n">${ICON('shield','ic-xs')} Emergency Fund</p><p class="ds-goal-amt"><b data-count="1480" data-pre="€">€1,480</b> <span>/ €2,000</span></p><p class="ds-goal-eta">Est. completion <b>April 12</b> <span class="ds-badge-ok">Ahead of schedule</span></p></div>
         </div>
         <div class="ds-card ds-fade"><p class="ds-card-t">Monthly spending</p><div class="ds-bars">${bars.map(b=>`<div class="ds-bar-wrap"><div class="ds-bar" style="--h:${b[1]}%"></div><span>${b[0]}</span></div>`).join('')}</div></div>
-        <div class="ds-card ds-coach ds-fade"><div class="ds-coach-ic">✨</div><div><p class="ds-coach-t">Goalify AI</p><p class="ds-coach-b">You've spent <b>18% less</b> on food this week — keep it up and you'll hit your Emergency Fund <b>9 days earlier</b>.</p></div></div>
+        <div class="ds-card ds-coach ds-fade"><div class="ds-coach-ic">${ICON('sparkle','ic-sm')}</div><div><p class="ds-coach-t">Goalify AI</p><p class="ds-coach-b">You've spent <b>18% less</b> on food this week — keep it up and you'll hit your Emergency Fund <b>9 days earlier</b>.</p></div></div>
       </div>
       <div class="ds-col">
-        <div class="ds-card ds-fade"><p class="ds-card-t">Recent transactions</p>${tx.map(t=>`<div class="ds-tx"><span class="ds-tx-ic">${t[0]}</span><div class="ds-tx-mid"><span class="ds-tx-n">${t[1]}</span><span class="ds-tx-time">${t[2]}</span></div><span class="ds-tx-amt ${t[4]}">${t[4]==='in'?'+':'−'}€${t[3].replace('-','').replace('+','')}</span></div>`).join('')}</div>
-        <div class="ds-card ds-fade"><p class="ds-card-t">Your goals</p>${mini.map(m=>`<div class="ds-mini"><span>${m[0]} ${m[1]}</span><b>${m[2]}%</b><div class="ds-mini-bar"><i style="--w:${m[2]}%"></i></div></div>`).join('')}</div>
+        <div class="ds-card ds-fade"><p class="ds-card-t">Recent transactions</p>${tx.map(t=>`<div class="ds-tx"><span class="ds-tx-ic">${ICON(t[0],'ic-sm')}</span><div class="ds-tx-mid"><span class="ds-tx-n">${t[1]}</span><span class="ds-tx-time">${t[2]}</span></div><span class="ds-tx-amt ${t[4]}">${t[4]==='in'?'+':'−'}€${t[3].replace('-','').replace('+','')}</span></div>`).join('')}</div>
+        <div class="ds-card ds-fade"><p class="ds-card-t">Your goals</p>${mini.map(m=>`<div class="ds-mini"><span>${ICON(m[0],'ic-xs')} ${m[1]}</span><b>${m[2]}%</b><div class="ds-mini-bar"><i style="--w:${m[2]}%"></i></div></div>`).join('')}</div>
         <div class="ds-card ds-fade"><p class="ds-card-t">Friends saving this month</p>${lb.map(r=>`<div class="ds-lb ${r[1]==='You'?'me':''}"><span class="ds-lb-r">${r[0]}</span><span class="ds-lb-av">${r[3]}</span><span class="ds-lb-n">${r[1]}</span><b class="ds-lb-v">€${r[2]}</b></div>`).join('')}</div>
       </div>
     </div>
-    <div class="ds-ach ds-fade">${ach.map(a=>`<span class="ds-badge" title="${a[1]}">${a[0]} ${a[1]}</span>`).join('')}</div>
+    <div class="ds-ach ds-fade">${ach.map(a=>`<span class="ds-badge" title="${a[1]}">${ICON(a[0],'ic-xs')} ${a[1]}</span>`).join('')}</div>
   </div>`;
 }
 // Dedicated mobile mockup — a real phone frame with a banking-style app, NOT a
 // shrunk desktop dashboard. Shown only <768px via CSS.
 function phoneMockup(){
-  const tx=[['🛒','Groceries','−€28.40','out'],['☕','Coffee','−€4.20','out'],['💰','Salary','+€1,250','in']];
+  const tx=[['cat-groceries','Groceries','−€28.40','out'],['cat-restaurants','Coffee','−€4.20','out'],['cat-income','Salary','+€1,250','in']];
   const bars=[70,42,58,35,80,50];
   const R=30,C=(2*Math.PI*R).toFixed(1),off=(C*(1-0.74)).toFixed(1);
-  const nav=[['home','🏠'],['goals','🎯'],['scan','◎'],['stats','📊'],['you','🧑']];
+  const nav=[['home','home'],['goals','goal'],['scan','camera'],['stats','chart'],['you','user']];
   return `<div class="pm">
     <div class="pm-notch"></div>
     <div class="pm-screen ds" style="--ds-C:${C}">
-      <div class="pm-top ds-fade"><div><p class="pm-hi">Good morning, Alex 👋</p><p class="pm-sub">You're <b class="ds-ahead">€148 ahead</b> this month</p></div><span class="ds-streak">🔥 8</span></div>
+      <div class="pm-top ds-fade"><div><p class="pm-hi">Good morning, Alex</p><p class="pm-sub">You're <b class="ds-ahead">€148 ahead</b> this month</p></div><span class="ds-streak">${ICON('bolt','ic-xs')} 8</span></div>
       <div class="pm-budget ds-fade"><p class="pm-budget-l">Left to spend this month</p><p class="pm-budget-v"><b data-count="612" data-pre="€">€612</b> <span>/ €900</span></p><div class="pm-budget-bar"><i style="--w:68%"></i></div></div>
       <div class="pm-row ds-fade">
-        <div class="pm-card pm-goal"><div class="ds-ring" style="width:66px;height:66px"><svg viewBox="0 0 66 66"><circle class="ds-ring-bg" cx="33" cy="33" r="${R}"/><circle class="ds-ring-fg" cx="33" cy="33" r="${R}" stroke-dasharray="${C}" stroke-dashoffset="${off}"/></svg><span class="ds-ring-c" data-count="74" data-suf="%">74%</span></div><p class="pm-goal-n">🛡️ Emergency Fund</p><p class="pm-goal-a"><b data-count="1480" data-pre="€">€1,480</b> / €2,000</p></div>
+        <div class="pm-card pm-goal"><div class="ds-ring" style="width:66px;height:66px"><svg viewBox="0 0 66 66"><circle class="ds-ring-bg" cx="33" cy="33" r="${R}"/><circle class="ds-ring-fg" cx="33" cy="33" r="${R}" stroke-dasharray="${C}" stroke-dashoffset="${off}"/></svg><span class="ds-ring-c" data-count="74" data-suf="%">74%</span></div><p class="pm-goal-n">${ICON('shield','ic-xs')} Emergency Fund</p><p class="pm-goal-a"><b data-count="1480" data-pre="€">€1,480</b> / €2,000</p></div>
         <div class="pm-card"><p class="ds-card-t">This week</p><div class="pm-mini-bars">${bars.map(h=>`<span class="ds-bar" style="--h:${h}%"></span>`).join('')}</div><p class="pm-week">Spending down <b class="ds-ahead">18%</b></p></div>
       </div>
-      <div class="pm-card pm-tx ds-fade"><p class="ds-card-t">Recent</p>${tx.map(t=>`<div class="ds-tx"><span class="ds-tx-ic">${t[0]}</span><span class="ds-tx-n" style="flex:1">${t[1]}</span><span class="ds-tx-amt ${t[3]}">${t[2]}</span></div>`).join('')}</div>
-      <div class="pm-nav">${nav.map((n,i)=>`<span class="pm-nav-i ${i===0?'on':''}">${n[1]}</span>`).join('')}</div>
+      <div class="pm-card pm-tx ds-fade"><p class="ds-card-t">Recent</p>${tx.map(t=>`<div class="ds-tx"><span class="ds-tx-ic">${ICON(t[0],'ic-sm')}</span><span class="ds-tx-n" style="flex:1">${t[1]}</span><span class="ds-tx-amt ${t[3]}">${t[2]}</span></div>`).join('')}</div>
+      <div class="pm-nav">${nav.map((n,i)=>`<span class="pm-nav-i ${i===0?'on':''}">${ICON(n[1],'ic-sm')}</span>`).join('')}</div>
     </div>
   </div>`;
 }
@@ -1483,7 +1515,7 @@ function landing(){
     ['trophy','Reach it','Hit milestones, level up, and start the next goal.']
   ];
   const navItem=(t,to)=>`<a href="#home" data-scroll="${to}" class="lp-nav-link">${t}</a>`;
-  const trust=[['✓','Free forever plan'],['✓','No credit card required'],['✓','Cancel anytime'],['🔒','Row-level security']];
+  const trust=[['check','Free forever plan'],['check','No credit card required'],['check','Cancel anytime'],['lock','Row-level security']];
   return `<header class="fixed inset-x-0 top-0 z-40 px-4 py-2.5">
     <div class="mx-auto max-w-7xl">
       <div class="lp-navbar flex items-center justify-between rounded-2xl px-4 py-2.5">
@@ -1504,14 +1536,13 @@ function landing(){
       <div class="lp-aurora"></div><div class="lp-haze"></div>
       <div class="relative mx-auto flex max-w-4xl flex-col items-center gap-8 text-center">
         <div class="reveal flex flex-col items-center">
-          <span class="lp-eyebrow"><span class="dot"></span> Your money, finally on your side</span>
-          <h1 class="lp-h1 lp-h1-glow mt-5"><span>Turn every euro</span> <span>into</span> <span class="gtext lp-glow">progress.</span></h1>
+          <h1 class="lp-h1 lp-h1-glow"><span>Turn every euro</span> <span>into</span> <span class="gtext lp-glow">progress.</span></h1>
           <p class="lp-lead mt-4 max-w-md mx-auto">Saving stops feeling like restriction once you can see it working. Log spending in seconds, keep a streak alive, and watch the date on your goal move closer.</p>
           <div class="mt-7 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
             <a href="${cta}" class="btn btn-primary lp-btn-lg">Start for free →</a>
             <a href="#home" data-scroll="how" class="btn btn-ghost lp-btn-lg">See how it works</a>
           </div>
-          <div class="mt-6 flex flex-wrap justify-center gap-x-6 gap-y-2 text-sm" style="color:var(--muted)">${trust.map(t=>`<span class="inline-flex items-center gap-1.5"><span style="color:var(--jade2)">${t[0]==='✓'?ICON('check','ic-sm'):t[0]}</span>${t[1]}</span>`).join('')}</div>
+          <div class="mt-6 flex flex-wrap justify-center gap-x-6 gap-y-2 text-sm" style="color:var(--muted)">${trust.map(t=>`<span class="inline-flex items-center gap-1.5"><span style="color:var(--jade2)">${ICON(t[0],'ic-sm')}</span>${t[1]}</span>`).join('')}</div>
           <div class="lp-hero-trust"><span class="inline-flex items-center gap-1.5 text-sm" style="color:var(--muted)">${ICON('globe','ic-sm')} 6 languages · <span style="color:var(--jade2)">€0</span> to start · no card required</span></div>
         </div>
         <div class="reveal lp-showcase mx-auto" style="transition-delay:.08s">
@@ -1568,10 +1599,10 @@ function landing(){
       </div>
       <div class="mt-14 grid gap-6 lg:grid-cols-3">
         ${[
-          ['🎓','Students','Tight budget, big plans.',['Track shared costs, textbooks and nights out','Build a buffer before you need it','Reach a semester-abroad fund on time']],
-          ['💼','Young professionals','First salary, first real goals.',['See exactly where each month goes','An emergency-fund plan with a real date','Streaks that keep the habit alive']],
-          ['🏡','Families','Every euro has a job.',['Plan for holidays, school and the unexpected','Cut categories without cutting joy','Watch shared goals fill up together']]
-        ].map((p,i)=>`<div class="lp-persona reveal" style="transition-delay:${i*0.06}s"><span class="lp-ico" style="background:color-mix(in srgb,var(--accent2) 14%,transparent)">${p[0]}</span><div><h3 class="text-lg font-bold">${p[1]}</h3><p class="mt-0.5 text-sm" style="color:var(--muted)">${p[2]}</p></div><ul>${p[3].map(x=>`<li class="flex gap-2"><span style="color:var(--jade2)">✓</span><span>${x}</span></li>`).join('')}</ul></div>`).join('')}
+          ['cat-education','Students','Tight budget, big plans.',['Track shared costs, textbooks and nights out','Build a buffer before you need it','Reach a semester-abroad fund on time']],
+          ['briefcase','Young professionals','First salary, first real goals.',['See exactly where each month goes','An emergency-fund plan with a real date','Streaks that keep the habit alive']],
+          ['cat-rent','Families','Every euro has a job.',['Plan for holidays, school and the unexpected','Cut categories without cutting joy','Watch shared goals fill up together']]
+        ].map((p,i)=>`<div class="lp-persona reveal" style="transition-delay:${i*0.06}s"><span class="lp-ico" style="background:color-mix(in srgb,var(--accent2) 14%,transparent)">${ICON(p[0],'ic-lg')}</span><div><h3 class="text-lg font-bold">${p[1]}</h3><p class="mt-0.5 text-sm" style="color:var(--muted)">${p[2]}</p></div><ul>${p[3].map(x=>`<li class="flex gap-2"><span style="color:var(--jade2)">✓</span><span>${x}</span></li>`).join('')}</ul></div>`).join('')}
       </div>
     </section>
 
@@ -1628,7 +1659,7 @@ function landing(){
         <div><p class="mb-3 text-sm font-semibold">Account</p><div class="flex flex-col gap-2 text-sm"><a class="lp-foot-link" href="#signup">Create account</a><a class="lp-foot-link" href="#login">Log in</a></div></div>
         <div><p class="mb-3 text-sm font-semibold">Get started</p><a href="${cta}" class="btn btn-primary text-sm !py-2 !px-4">Start for free →</a></div>
       </div>
-      <div class="mt-10 flex flex-col items-center justify-between gap-3 pt-6 text-center text-sm sm:flex-row sm:text-left" style="border-top:1px solid var(--border);color:var(--muted)"><span>© ${new Date().getFullYear()} Goalify. All rights reserved.</span><span>Made with 💜 for savers everywhere</span></div>
+      <div class="mt-10 flex flex-col items-center justify-between gap-3 pt-6 text-center text-sm sm:flex-row sm:text-left" style="border-top:1px solid var(--border);color:var(--muted)"><span>© ${new Date().getFullYear()} Goalify</span></div>
     </footer>
   </main>`;
 }
@@ -1645,9 +1676,9 @@ function authWrap(inner){
           <h2 class="auth-aside-h">Reach your financial goals faster.</h2>
           <p class="auth-aside-p">Track spending, build better habits, and watch every goal get closer.</p>
           <ul class="auth-aside-list">
-            <li class="auth-bullet"><span class="auth-bi">🎯</span> Set goals and reach them with a clear plan</li>
-            <li class="auth-bullet"><span class="auth-bi">📊</span> See where your money goes in seconds</li>
-            <li class="auth-bullet"><span class="auth-bi">🔒</span> Private &amp; secure — only you can see it</li>
+            <li class="auth-bullet"><span class="auth-bi">${ICON('goal','ic-sm')}</span> Set goals and reach them with a clear plan</li>
+            <li class="auth-bullet"><span class="auth-bi">${ICON('chart','ic-sm')}</span> See where your money goes in seconds</li>
+            <li class="auth-bullet"><span class="auth-bi">${ICON('lock','ic-sm')}</span> Private &amp; secure — only you can see it</li>
           </ul>
           <div class="auth-preview">${landingPreview()}</div>
         </div>
@@ -2275,7 +2306,7 @@ async function finishOnboarding(){
     try{await sb.from('onboarding_progress').upsert({user_id:SESSION.user.id,completed:true,completed_at:new Date().toISOString()},{onConflict:'user_id'});}catch(e){/* table optional */}
   }
   try{launchConfetti();}catch(e){}
-  toast('🎯 Goal created!');
+  toast('Goal created!');
   setTimeout(()=>{location.hash='#app/dashboard';render();},450);
 }
 
@@ -2435,7 +2466,7 @@ function whatToReduceHTML(){
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h3 class="font-semibold">What to reduce</h3><p class="text-xs" style="color:var(--muted)">This month · ${sm.emoji} ${sm.name} mode (${Math.round(sm.cut*100)}% cuts)</p></div>
       <div class="flex gap-1 rounded-xl p-1 text-xs" style="background:var(--glass)">${Object.keys(SAVINGS_MODES).map(k=>`<button data-action="setSavingsMode" data-mode="${k}" class="rounded-lg px-2.5 py-1.5 ${cur===k?'text-white':''}" title="${SAVINGS_MODES[k].name}" style="${cur===k?'background:linear-gradient(90deg,var(--accent1),var(--accent2))':'color:var(--muted)'}">${SAVINGS_MODES[k].emoji}</button>`).join('')}</div>
     </div>
-    ${items.length?`<div class="space-y-3">${items.map(it=>{const m=CATS[it.cat]||CATS.other;return `<div class="flex items-center gap-3 rounded-xl p-3" style="background:var(--glass)"><span class="flex h-10 w-10 items-center justify-center rounded-lg text-lg" style="background:var(--glass)">${m.e}</span><div class="min-w-0 flex-1"><p class="text-sm font-medium">${m.l}</p><p class="text-xs" style="color:var(--muted)">Now ${fmt(it.spend)}/mo${it.impact?' · '+it.impact:''}</p></div><div class="text-right"><p class="text-sm font-bold text-emerald-400">save ${fmt(it.save)}</p><p class="text-[11px]" style="color:var(--muted)">per month</p></div></div>`;}).join('')}<div class="rounded-xl p-3 text-center text-sm" style="background:var(--glass)">Total potential: <b class="text-emerald-400">${fmt(items.reduce((a,i)=>a+i.save,0))}/mo</b></div></div>`:`<p class="py-8 text-center text-sm" style="color:var(--muted)">Add some expenses and Goalify will show exactly where to cut.</p>`}
+    ${items.length?`<div class="space-y-3">${items.map(it=>{const m=CATS[it.cat]||CATS.other;return `<div class="flex items-center gap-3 rounded-xl p-3" style="background:var(--glass)"><span class="flex h-10 w-10 items-center justify-center rounded-lg" style="background:var(--glass)">${catIcon(it.cat)}</span><div class="min-w-0 flex-1"><p class="text-sm font-medium">${m.l}</p><p class="text-xs" style="color:var(--muted)">Now ${fmt(it.spend)}/mo${it.impact?' · '+it.impact:''}</p></div><div class="text-right"><p class="text-sm font-bold text-emerald-400">save ${fmt(it.save)}</p><p class="text-[11px]" style="color:var(--muted)">per month</p></div></div>`;}).join('')}<div class="rounded-xl p-3 text-center text-sm" style="background:var(--glass)">Total potential: <b class="text-emerald-400">${fmt(items.reduce((a,i)=>a+i.save,0))}/mo</b></div></div>`:`<p class="py-8 text-center text-sm" style="color:var(--muted)">Add some expenses and Goalify will show exactly where to cut.</p>`}
   </div>`;
 }
 
@@ -2731,7 +2762,7 @@ function dashboardView(){
   const gamify=c.gamify?`<div class="grid gap-4 lg:grid-cols-2">${missionsCompactHTML()}${levelXpHTML()}</div><div class="grid gap-4 lg:grid-cols-2">${weeklyCompactHTML()}${achievementsLatestHTML()}</div>`:'';
   const studentPerk='';
   const freePerk = plan==='free' ? `<a href="#app/plans" class="block glass-strong rounded-2xl p-5 transition hover:brightness-110" style="border:1px solid var(--border)"><div class="flex flex-wrap items-center justify-between gap-3"><div><h3 class="font-semibold">Unlock more with Pro & Premium</h3><p class="mt-1 text-sm" style="color:var(--muted)">Pro removes the goal limit and adds goal deletion. Premium adds the social feed, XP & levels, badges, themes and smart AI insights.</p></div><span class="btn btn-primary !py-2 text-sm shrink-0">See plans →</span></div></a>` : '';
-  return `<div class="dash-stack space-y-5 sm:space-y-6">${header}${heroStatsHTML(s)}${toolsRowHTML()}${goalsOverviewHTML()}${recurringCompactHTML()}${savingsOpportunitiesHTML()}${moneyHealthHTML(h)}${smartInsightsHTML()}${quizMonthlyPromptHTML()}${analytics}${freePerk}</div>`;
+  return `<div class="dash-stack space-y-5 sm:space-y-6">${header}${safeToSpendHTML()}${heroStatsHTML(s)}${toolsRowHTML()}${goalsOverviewHTML()}${recurringCompactHTML()}${billCalendarHTML()}${whatIfHTML()}${savingsOpportunitiesHTML()}${moneyHealthHTML(h)}${smartInsightsHTML()}${quizMonthlyPromptHTML()}${analytics}${freePerk}</div>`;
 }
 
 function missionRow(m){
@@ -2878,6 +2909,144 @@ function goalAnalyticsHTML(){
 }
 
 // ============================================================
+// PREMIUM · SAFE-TO-SPEND
+// One number that answers "can I actually afford this today?" — income, minus
+// what is already committed to recurring charges and goal contributions, minus
+// what has gone out this month, spread across the days that are left.
+// ============================================================
+function safeToSpend(){
+  const s=snapshot(ME,EXPENSES);
+  const now=new Date();
+  const daysInMonth=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
+  const daysLeft=Math.max(1,daysInMonth-now.getDate()+1);
+  const committed=detectRecurring().filter(r=>!r.dormant).reduce((a,r)=>a+r.monthly,0);
+  // recurring already billed this month is inside s.spending — don't subtract twice
+  const mStart=new Date(now.getFullYear(),now.getMonth(),1);
+  const billed=detectRecurring().filter(r=>!r.dormant&&new Date(r.lastAt)>=mStart)
+    .reduce((a,r)=>a+r.typical,0);
+  const stillDue=Math.max(0,committed-billed);
+  const goalPledge=(GOALS||[]).filter(g=>!g.completed)
+    .reduce((a,g)=>a+Number(g.monthly_contribution||0),0);
+  const free=s.income-s.spending-stillDue-goalPledge;
+  return {perDay:free/daysLeft,total:free,daysLeft,stillDue,goalPledge,spent:s.spending,income:s.income};
+}
+function safeToSpendHTML(){
+  const M='style="color:var(--muted)"';
+  if(!caps(ME?.plan||'free').safeToSpend)
+    return upsellCard('Safe to spend today',
+      'Premium works out what is genuinely free to spend after bills and goal contributions, and updates it every time you log something.','Get Premium');
+  const r=safeToSpend();
+  const tone=r.perDay<0?'var(--coral)':r.perDay<10?'var(--gold2)':'var(--jade2)';
+  const line=r.perDay<0
+    ?`You are over by ${fmt(Math.abs(r.total))} this month. Trimming a category is the fastest way back.`
+    :`After bills and goal contributions, across the ${r.daysLeft} day${r.daysLeft===1?'':'s'} left this month.`;
+  return `<div class="glass-strong rounded-2xl p-5 sm:p-6 sts-card">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div class="min-w-0">
+        <p class="t-label">Safe to spend today</p>
+        <p class="sts-num" style="color:${tone}">${fmt(Math.max(0,r.perDay))}</p>
+        <p class="mt-1 text-sm" ${M}>${line}</p>
+      </div>
+      <div class="sts-break">
+        <div><span ${M}>Income</span><b>${fmt(r.income)}</b></div>
+        <div><span ${M}>Spent</span><b>−${fmt(r.spent)}</b></div>
+        <div><span ${M}>Bills still due</span><b>−${fmt(r.stillDue)}</b></div>
+        <div><span ${M}>Into goals</span><b>−${fmt(r.goalPledge)}</b></div>
+      </div>
+    </div></div>`;
+}
+
+// ============================================================
+// PREMIUM · BILL CALENDAR
+// The month ahead as a timeline: which recurring charges land on which day,
+// so a tight week is visible before it arrives rather than after.
+// ============================================================
+function billCalendarHTML(){
+  const M='style="color:var(--muted)"';
+  if(!caps(ME?.plan||'free').billCalendar)
+    return upsellCard('The month ahead',
+      'Premium lays out every upcoming charge on a calendar, so you can see a heavy week coming before it lands.','Get Premium');
+  const items=detectRecurring().filter(r=>!r.dormant);
+  if(!items.length)return '';
+  const now=new Date(),today=now.getDate();
+  const dim=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
+  // map each charge onto its billing day this month
+  const byDay={};
+  items.forEach(r=>{const d=new Date(r.nextAt).getDate();(byDay[d]=byDay[d]||[]).push(r);});
+  const heaviest=Object.entries(byDay).map(([d,l])=>[+d,l.reduce((a,r)=>a+r.typical,0)]).sort((a,b)=>b[1]-a[1])[0];
+  const cells=[];
+  for(let d=1;d<=dim;d++){
+    const list=byDay[d]||[];
+    const sum=list.reduce((a,r)=>a+r.typical,0);
+    const past=d<today;
+    cells.push(`<div class="bc-day${d===today?' is-today':''}${past?' is-past':''}${sum?' has-bill':''}"
+      ${sum?`title="${list.map(r=>r.merchant+' '+fmt(r.typical)).join(', ')}"`:''}>
+      <span class="bc-d">${d}</span>${sum?`<span class="bc-amt">${fmt(sum)}</span>`:''}</div>`);
+  }
+  const upcoming=items.filter(r=>new Date(r.nextAt).getDate()>=today)
+    .sort((a,b)=>new Date(a.nextAt)-new Date(b.nextAt)).slice(0,3);
+  return `<div class="glass rounded-2xl p-4 sm:p-5">
+    <div class="flex items-center justify-between gap-2">
+      <div><h3 class="font-bold">The month ahead</h3><p class="text-xs" ${M}>Recurring charges mapped onto the days they land.</p></div>
+      ${heaviest?`<span class="chip shrink-0">Heaviest: ${heaviest[0]}${nth(heaviest[0])}</span>`:''}
+    </div>
+    <div class="bc-grid mt-4">${cells.join('')}</div>
+    ${upcoming.length?`<div class="mt-3 grid gap-1.5">${upcoming.map(r=>`<div class="flex items-center gap-2 text-sm">${catIcon(r.category,'ic-xs')}<span class="flex-1 truncate">${esc(r.merchant)}</span><span ${M}>${r.nextAt.slice(8)}${nth(+r.nextAt.slice(8))}</span><b>${fmt(r.typical)}</b></div>`).join('')}</div>`:''}
+  </div>`;
+}
+function nth(n){return n%10===1&&n!==11?'st':n%10===2&&n!==12?'nd':n%10===3&&n!==13?'rd':'th';}
+
+// ============================================================
+// PREMIUM · WHAT-IF
+// Turns a habit into a date. "Skip 2 coffees a week" becomes "your goal lands
+// 3 weeks sooner", using the user's real top goal and real category spend.
+// ============================================================
+function whatIfHTML(){
+  const M='style="color:var(--muted)"';
+  if(!caps(ME?.plan||'free').whatIf)
+    return upsellCard('What if I cut back?',
+      'Premium turns any habit into a date: cut a category by a bit and see exactly how much sooner your goal arrives.','Get Premium');
+  const g=topGoal();
+  const spend=monthCatSpend();
+  const opts=REDUCIBLE.filter(c=>spend[c]>0).sort((a,b)=>spend[b]-spend[a]).slice(0,5);
+  if(!g||!opts.length)
+    return `<div class="glass rounded-2xl p-5"><h3 class="font-bold">What if I cut back?</h3><p class="mt-2 text-sm" ${M}>Log a few expenses and set a goal, then this will show how much sooner it arrives if you trim a category.</p></div>`;
+  return `<div class="glass rounded-2xl p-4 sm:p-5">
+    <h3 class="font-bold">What if I cut back?</h3>
+    <p class="text-xs" ${M}>Against <b style="color:var(--text)">${esc(g.name)}</b>, ${fmt(Math.max(0,g.target_amount-g.saved_amount))} to go.</p>
+    <div class="mt-3 flex flex-wrap gap-2">
+      ${opts.map(c=>`<button class="chip wi-chip" data-action="whatIf" data-cat="${c}" data-pct="25">Cut ${(CATS[c]||CATS.other).l} 25%</button>`).join('')}
+      ${opts.slice(0,2).map(c=>`<button class="chip wi-chip" data-action="whatIf" data-cat="${c}" data-pct="50">Halve ${(CATS[c]||CATS.other).l}</button>`).join('')}
+    </div>
+    <div id="whatIfOut" class="mt-3"></div>
+  </div>`;
+}
+function runWhatIf(cat,pctCut){
+  const el=$('#whatIfOut');if(!el)return;
+  const g=topGoal();if(!g)return;
+  const spend=monthCatSpend()[cat]||0;
+  const saved=spend*(pctCut/100);
+  const left=Math.max(0,g.target_amount-(g.saved_amount||0));
+  const base=Number(g.monthly_contribution||0);
+  const label=(CATS[cat]||CATS.other).l;
+  if(saved<=0)return el.innerHTML=`<p class="text-sm" style="color:var(--muted)">No ${label} spending logged this month yet.</p>`;
+  const monthsNow=base>0?left/base:Infinity;
+  const monthsNew=left/(base+saved);
+  const M='style="color:var(--muted)"';
+  // derive "sooner" from the same rounded figures that get shown, so the
+  // sentence can never contradict itself (9 instead of 10, "2 months sooner")
+  const nowC=Math.ceil(monthsNow),newC=Math.ceil(monthsNew);
+  const sooner=isFinite(monthsNow)?Math.max(0,nowC-newC):null;
+  el.innerHTML=`<div class="wi-out anim">
+    <p class="text-sm">Cutting <b>${label}</b> by ${pctCut}% frees <b style="color:var(--jade2)">${fmt(saved)}</b> a month.</p>
+    <p class="mt-1 text-sm" ${M}>${isFinite(monthsNow)
+      ? `<b style="color:var(--text)">${esc(g.name)}</b> arrives in about ${newC} month${newC===1?'':'s'} instead of ${nowC}${sooner?`, ${sooner} month${sooner===1?'':'s'} sooner`:''}.`
+      : `That alone would reach <b style="color:var(--text)">${esc(g.name)}</b> in about ${newC} month${newC===1?'':'s'}.`}</p>
+    <p class="mt-1 text-xs" ${M}>Over a year that is ${fmt(saved*12)}.</p>
+  </div>`;
+}
+
+// ============================================================
 // CATEGORY BUDGETS
 // A monthly cap per spending category. localStorage is the instant cache;
 // profiles.budgets is the durable copy (see migration-2026-08-budgets.sql).
@@ -2920,7 +3089,7 @@ function budgetsPanelHTML(){
     const col=r.over?'var(--coral)':r.pct>=80?'var(--gold2)':'var(--jade2)';
     return `<div class="bud-row">
       <div class="flex items-center justify-between gap-2">
-        <span class="flex items-center gap-2 min-w-0"><span>${cat.e}</span><span class="truncate text-sm font-medium">${cat.l}</span></span>
+        <span class="flex items-center gap-2 min-w-0">${catIcon(r.cat)}<span class="truncate text-sm font-medium">${cat.l}</span></span>
         <span class="text-sm shrink-0"><b style="color:${col}">${fmt(r.used)}</b> <span ${M}>/ ${fmt(r.limit)}</span></span>
       </div>
       <div class="bud-track mt-1.5"><i style="width:${w}%;background:${col}"></i></div>
@@ -2941,7 +3110,7 @@ function budgetsPanelHTML(){
       ? `<div class="mt-4">${upsellCard('Budget limit reached',`Free covers ${lim} categories. Pro lets you budget every one of them.`)}</div>`
       : `<form id="budgetForm" class="mt-4 flex flex-wrap items-end gap-2">
           <div class="flex-1 min-w-[8rem]"><label class="label">Category</label>
-            <select name="cat" class="input">${unbudgeted.map(k=>`<option value="${k}">${CATS[k].e} ${CATS[k].l}</option>`).join('')}</select></div>
+            <select name="cat" class="input">${unbudgeted.map(k=>`<option value="${k}">${CATS[k].l}</option>`).join('')}</select></div>
           <div class="w-28"><label class="label">Cap (€)</label><input name="limit" type="number" min="1" step="1" class="input" placeholder="100" required></div>
           <button class="btn btn-primary btn-sm">Set budget</button>
         </form>`}
@@ -3028,7 +3197,7 @@ function recurringView(){
   const row=(i)=>{
     const c=CATS[i.category]||CATS.other;
     return `<div class="glass rounded-2xl p-4 flex items-center gap-3 ${i.dormant?'opacity-60':''}">
-      <span class="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-lg" style="background:color-mix(in srgb,${c.c} 18%,transparent)">${c.e}</span>
+      <span class="grid h-10 w-10 shrink-0 place-items-center rounded-xl" style="background:color-mix(in srgb,${c.c} 18%,transparent)">${catIcon(i.category)}</span>
       <div class="min-w-0 flex-1">
         <p class="truncate font-semibold">${esc(i.merchant)}</p>
         <p class="text-xs" ${M}>${i.cadence.label} · ${c.l} · seen ${i.count}×${i.dormant?' · last on '+i.lastAt:' · next around '+i.nextAt}</p>
@@ -3082,10 +3251,10 @@ function analyticsView(){
     <div class="glass rounded-2xl p-4 sm:p-5 lg:col-span-3"><div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="font-bold">Spending trend</h3><p class="text-xs" ${M}>All logged expenses over time</p></div><div class="grid grid-cols-3 gap-1 rounded-xl p-1 text-xs sm:flex" style="background:var(--glass)">${timeframeTabs([['month','Month'],['year','Year'],['five','5Y']])}</div></div><div style="height:220px;max-height:42vh"><canvas id="spendChart"></canvas></div></div>
     <div class="glass rounded-2xl p-4 sm:p-5 lg:col-span-2"><h3 class="font-bold">Category breakdown</h3><p class="text-xs" ${M}>This month</p><div class="mt-3" style="height:200px"><canvas id="catChart"></canvas></div></div>
   </div>`;
-  const addForm=`<div class="glass rounded-2xl p-5 h-fit"><h3 class="font-bold">Add expense</h3><p class="text-xs" style="color:var(--muted)">Log it in seconds. Analytics update instantly.</p><form id="expForm" class="mt-4 space-y-3"><div><label class="label">Amount (€)</label><input name="amount" type="number" step="0.01" min="0" class="input" placeholder="0.00" required></div><div><label class="label">Category</label><select name="category" class="input">${Object.keys(CATS).map(c=>`<option value="${c}">${CATS[c].e} ${CATS[c].l}</option>`).join('')}</select></div><div><label class="label">Merchant</label><input name="merchant" class="input" placeholder="optional"></div><div><label class="label">Date</label><input name="date" type="date" class="input" value="${todayISO()}"></div><button class="btn btn-primary w-full text-sm">+ Add expense</button></form></div>`;
+  const addForm=`<div class="glass rounded-2xl p-5 h-fit"><h3 class="font-bold">Add expense</h3><p class="text-xs" style="color:var(--muted)">Log it in seconds. Analytics update instantly.</p><form id="expForm" class="mt-4 space-y-3"><div><label class="label">Amount (€)</label><input name="amount" type="number" step="0.01" min="0" class="input" placeholder="0.00" required></div><div><label class="label">Category</label><select name="category" class="input">${Object.keys(CATS).map(c=>`<option value="${c}">${CATS[c].l}</option>`).join('')}</select></div><div><label class="label">Merchant</label><input name="merchant" class="input" placeholder="optional"></div><div><label class="label">Date</label><input name="date" type="date" class="input" value="${todayISO()}"></div><button class="btn btn-primary w-full text-sm">+ Add expense</button></form></div>`;
   const txList=`<div class="glass rounded-2xl p-5 lg:col-span-2"><div class="flex items-center justify-between"><h3 class="font-bold">Recent transactions</h3>${EXPENSES.length?`<span class="chip">${EXPENSES.length} total</span>`:''}</div>
     ${EXPENSES.length===0?`<div class="empty-wrap mt-4 !py-10"><div class="empty-orb" style="height:3.2rem;width:3.2rem;font-size:1.5rem">🧾</div><p class="mt-3 text-sm font-bold">No transactions yet</p><p class="mt-1 text-xs" style="color:var(--muted)">Add your first expense and your analytics come alive.</p></div>`
-    :`<div class="mt-3 max-h-[400px] space-y-1 overflow-y-auto pr-1">${EXPENSES.slice(0,50).map(e=>{const m=CATS[e.category]||CATS.other,inc=e.category==='income';return `<div class="tx-row"><span class="tx-ico">${m.e}</span><div class="min-w-0 flex-1"><p class="truncate text-sm font-semibold">${esc(e.merchant||m.l)}</p><p class="text-xs" style="color:var(--muted)">${m.l} · ${e.spent_at}</p></div><span class="text-sm font-bold ${inc?'text-emerald-400':''}">${inc?'+':'-'}${fmt(e.amount)}</span><button data-action="delExp" data-id="${e.id}" class="icon-btn danger" title="Delete">🗑</button></div>`;}).join('')}</div>`}</div>`;
+    :`<div class="mt-3 max-h-[400px] space-y-1 overflow-y-auto pr-1">${EXPENSES.slice(0,50).map(e=>{const m=CATS[e.category]||CATS.other,inc=e.category==='income';return `<div class="tx-row"><span class="tx-ico">${catIcon(e.category)}</span><div class="min-w-0 flex-1"><p class="truncate text-sm font-semibold">${esc(e.merchant||m.l)}</p><p class="text-xs" style="color:var(--muted)">${m.l} · ${e.spent_at}</p></div><span class="text-sm font-bold ${inc?'text-emerald-400':''}">${inc?'+':'-'}${fmt(e.amount)}</span><button data-action="delExp" data-id="${e.id}" class="icon-btn danger" title="Delete">🗑</button></div>`;}).join('')}</div>`}</div>`;
   return `<div class="dash-stack space-y-5 sm:space-y-6">
     <div class="page-head"><div><h1 class="page-h1">Analytics</h1><p class="page-sub">Your money, understood: health, habits, and what to do next.</p></div></div>
     ${hero}
@@ -3578,7 +3747,8 @@ function paymentSuccessView(plan,cycle){
 function plansView(){
   const cur=ME.plan;
   return `<div class="space-y-6"><div><h1 class="text-3xl font-bold">Plans & Pricing</h1><p class="mt-1 text-sm text-slate-400">Pick the plan that fits you. You're on <b class="text-white">${PLANS[cur].name}</b>. Every paid plan includes a <b class="text-white">1-week free trial</b>, cancel anytime.</p></div>
-  <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">${['free','pro'].map(id=>planCard(id,cur)).join('')}<div class="glass rounded-2xl p-6 flex flex-col items-center justify-center text-center" style="opacity:.8"><h3 class="text-lg font-semibold">Premium &amp; Business</h3><p class="mt-2 text-sm" style="color:var(--muted)">More power for power-savers and teams.</p><span class="chip mt-3">Coming soon</span></div></div>
+  <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">${['free','pro','premium'].map(id=>planCard(id,cur)).join('')}</div>
+  <div class="glass rounded-2xl p-5 flex flex-wrap items-center justify-between gap-3"><div><h3 class="font-semibold">Business</h3><p class="mt-1 text-sm" style="color:var(--muted)">Companies, invoices, payroll and cash flow. A separate workspace built for operations.</p></div><span class="chip shrink-0">Coming soon</span></div>
   <div class="glass rounded-2xl p-5 text-sm text-slate-400"><b class="text-white">Invite friends:</b> 25 invites unlocks <b class="text-white">3 months of Pro free</b> — see <a href="#app/rewards" class="text-accent-purple hover:underline">Rewards</a>.</div>
   ${DEMO_MODE?`<p class="text-xs text-slate-500">Demo: selecting a plan previews how that tier looks — no payment is taken. Real billing activates when the backend goes live.</p>`:''}
   </div>`;
@@ -3631,7 +3801,7 @@ function openGiftModal(){
     const to=($('#gfTo').value||'').trim();
     if(!to){$('#gfErr').textContent='Enter a username or email.';return;}
     if(!recordGift(to)){$('#gfErr').textContent='No tickets left this month.';return;}
-    close();toast('🎉 Premium week gifted to '+to+'!');render();
+    close();toast('Premium week gifted to'+to+'!');render();
   });
 }
 // -------------------- Rewards / referrals --------------------
@@ -4463,7 +4633,7 @@ document.addEventListener('click',async(e)=>{
           toast(error.message||'Could not resend code','err'); // REAL Supabase message (e.g. rate limit)
           return;
         }
-        toast('New code sent — check your inbox 📨');
+        toast('New code sent — check your inbox');
         startOtpCooldown(60); // disable + count down only AFTER a successful resend (respects the 60s rate limit)
       }catch(err){
         a.style.pointerEvents=''; a.textContent=oldTxt;
@@ -4472,11 +4642,11 @@ document.addEventListener('click',async(e)=>{
       }
     }
     else if(act==='faq'){const i=a.getAttribute('data-i');$('#fa-'+i).classList.toggle('hidden');$('#fi-'+i).textContent=$('#fa-'+i).classList.contains('hidden')?'+':'−';}
-    else if(act==='storeLock'){toast('🔒 Upgrade to Pro to spend GoalCoins & equip items');location.hash='#app/plans';}
+    else if(act==='storeLock'){toast('Upgrade to Pro to spend GoalCoins & equip items');location.hash='#app/plans';}
     else if(act==='featHelp'){const h=FEAT_HELP[a.getAttribute('data-help')];if(h)openFeatHelp(a.getAttribute('data-help'),h);}
-    else if(act==='gvBuy'){const cost=+a.getAttribute('data-cost'),name=a.getAttribute('data-name');if(!spendCoins('goalverse',name,cost)){toast('Not enough GoalCoins for '+name,'err');return;}const b=coinBalance();toast('🌌 '+name+' applied to your GoalVerse');render();requestAnimationFrame(()=>pulseCoinPill(b+cost,b));}
-    else if(act==='buyItem'){if((ME?.plan||'free')==='free'){toast('🔒 Upgrade to Pro to buy items');location.hash='#app/plans';return;}const it=STORE_ITEMS.find(x=>x.id===a.getAttribute('data-id'));if(!it)return;if(ownsItem(it.id)){toast('Already owned');return;}if(!spendCoins('cosmetic',it.id,it.cost)){toast('Not enough GoalCoins — earn more by checking in!','err');return;}const owned=ownedItems();owned.push(it.id);setOwnedItems(owned);equipItem(it);const b=coinBalance();toast('🎉 '+it.name+' unlocked & equipped');render();requestAnimationFrame(()=>pulseCoinPill(b+it.cost,b));}
-    else if(act==='equipItem'){if((ME?.plan||'free')==='free'){toast('🔒 Upgrade to Pro to equip items');return;}const it=STORE_ITEMS.find(x=>x.id===a.getAttribute('data-id'));if(!it||!ownsItem(it.id))return;equipItem(it);toast('✓ '+it.name+' equipped');render();}
+    else if(act==='gvBuy'){const cost=+a.getAttribute('data-cost'),name=a.getAttribute('data-name');if(!spendCoins('goalverse',name,cost)){toast('Not enough GoalCoins for '+name,'err');return;}const b=coinBalance();toast(''+name+' applied to your GoalVerse');render();requestAnimationFrame(()=>pulseCoinPill(b+cost,b));}
+    else if(act==='buyItem'){if((ME?.plan||'free')==='free'){toast('Upgrade to Pro to buy items');location.hash='#app/plans';return;}const it=STORE_ITEMS.find(x=>x.id===a.getAttribute('data-id'));if(!it)return;if(ownsItem(it.id)){toast('Already owned');return;}if(!spendCoins('cosmetic',it.id,it.cost)){toast('Not enough GoalCoins — earn more by checking in!','err');return;}const owned=ownedItems();owned.push(it.id);setOwnedItems(owned);equipItem(it);const b=coinBalance();toast(''+it.name+' unlocked & equipped');render();requestAnimationFrame(()=>pulseCoinPill(b+it.cost,b));}
+    else if(act==='equipItem'){if((ME?.plan||'free')==='free'){toast('Upgrade to Pro to equip items');return;}const it=STORE_ITEMS.find(x=>x.id===a.getAttribute('data-id'));if(!it||!ownsItem(it.id))return;equipItem(it);toast('✓ '+it.name+' equipped');render();}
     else if(act==='ltPick'){const kind=a.getAttribute('data-lt'),v=a.getAttribute('data-v');if(kind==='income'){LT.income=+v;LT.step=1;ltRender();}else if(kind==='spend'){LT.spendKey=v;LT.step=2;ltRender();}else if(kind==='goal'){LT.goal=+v;ltProject();}}
     else if(act==='ltStart'){try{localStorage.setItem('goalify_teaser',JSON.stringify({income:LT.income,goal:LT.goal,ts:Date.now()}));}catch(_){}if(typeof QA!=='undefined'&&QA&&LT.income)QA.income=LT.income;/* anchor navigates to #signup */}
     else if(act==='mnav'){const p=document.getElementById('mnavPanel');if(p)p.classList.toggle('hidden');}
@@ -4540,8 +4710,8 @@ document.addEventListener('click',async(e)=>{
     else if(act==='togglePrivate'){const gid=a.getAttribute('data-id');const g=GOALS.find(x=>x.id===gid);if(g){g.private=!g.private;if(!DEMO_MODE){await sb.from('goals').update({private:g.private}).eq('id',gid);}toast(g.private?'Goal is now private 🔒':'Goal is now public 🌍');render();}}
     else if(act==='archiveGoal'){const gid=a.getAttribute('data-id');const g=GOALS.find(x=>x.id===gid);if(!g)return;const ns=g.status==='archived'?'active':'archived';g.status=ns;if(!DEMO_MODE){await sb.from('goals').update({status:ns}).eq('id',gid);}toast(ns==='archived'?'Goal archived 📦':'Goal restored ♻️');render();}
     else if(act==='delGoal'){if(ME.plan==='free'){toast('Free plan: archive goals instead of deleting. Upgrade to delete.','err');return;}const gid=a.getAttribute('data-id');if(DEMO_MODE){const idx=DEMO_GOALS.findIndex(g=>g.id===gid);if(idx>-1)DEMO_GOALS.splice(idx,1);toast('Goal deleted');render();}else{await sb.from('goals').delete().eq('id',gid);toast('Goal deleted');render();}}
-    else if(act==='contrib'){const id=a.getAttribute('data-id');const amt=+$('#c-'+id).value;if(amt){const g=GOALS.find(x=>x.id===id);const wasDone=g.completed;const ns=Math.max(0,Number(g.saved_amount)+amt);const done=ns>=g.target_amount;if(DEMO_MODE){g.saved_amount=ns;g.completed=done;if(done&&!wasDone){DEMO_ME.xp=(DEMO_ME.xp||0)+100;coinEarn('goal_complete',id,a);toast('🎉 Goal completed! +100 XP');}else toast('Progress saved (demo)');render();}else{g.saved_amount=ns;g.completed=done;
-        if(done&&!wasDone){if(ME)ME.xp=(ME.xp||0)+100;coinEarn('goal_complete',id,a);toast('🎉 Goal completed! +100 XP');}else toast('Progress saved');
+    else if(act==='contrib'){const id=a.getAttribute('data-id');const amt=+$('#c-'+id).value;if(amt){const g=GOALS.find(x=>x.id===id);const wasDone=g.completed;const ns=Math.max(0,Number(g.saved_amount)+amt);const done=ns>=g.target_amount;if(DEMO_MODE){g.saved_amount=ns;g.completed=done;if(done&&!wasDone){DEMO_ME.xp=(DEMO_ME.xp||0)+100;coinEarn('goal_complete',id,a);toast('Goal completed! +100 XP');}else toast('Progress saved (demo)');render();}else{g.saved_amount=ns;g.completed=done;
+        if(done&&!wasDone){if(ME)ME.xp=(ME.xp||0)+100;coinEarn('goal_complete',id,a);toast('Goal completed! +100 XP');}else toast('Progress saved');
         render();
         sb.from('goals').update({saved_amount:ns,completed:done}).eq('id',id).then(({error})=>{
           if(error){g.saved_amount=Math.max(0,ns-amt);g.completed=wasDone;toast('Save failed — check your connection','err');render();}
@@ -4557,7 +4727,7 @@ document.addEventListener('click',async(e)=>{
     else if(act==='setBg'){applyBg(a.getAttribute('data-bg'));if(!DEMO_MODE){await sb.from('profiles').update({bg:ME.bg}).eq('id',SESSION.user.id);}render();}
     else if(act==='setVisibility'){const v=a.getAttribute('data-v');localStorage.setItem('goalify_visibility',v);if(ME)ME.profile_visibility=v;if(!DEMO_MODE){await sb.from('profiles').update({profile_visibility:v}).eq('id',SESSION.user.id).catch(()=>{});}toast(v==='public'?'Profile is now public':'Profile is now private');render();}
     else if(act==='prestige'){const level=levelFromXp(ME.xp).level;if(!canPrestige(level)){toast('Reach Level 100 to prestige','err');return;}
-      if(DEMO_MODE){const np=(ME.prestige||0)+1;DEMO_ME.prestige=np;DEMO_ME.xp=0;ME.prestige=np;ME.xp=0;toast('🌟 Prestige '+np+'! A fresh climb begins.');render();return;}
+      if(DEMO_MODE){const np=(ME.prestige||0)+1;DEMO_ME.prestige=np;DEMO_ME.xp=0;ME.prestige=np;ME.xp=0;toast('Prestige'+np+'! A fresh climb begins.');render();return;}
       // The Level-100 gate is re-checked server-side; the client check above is
       // only there to avoid a pointless round trip.
       try{
@@ -4565,12 +4735,12 @@ document.addEventListener('click',async(e)=>{
         if(error)throw error;
         if(!data?.ok)return toast(data?.error||'Not eligible to prestige yet','err');
         await loadProfile();
-        toast('🌟 Prestige '+data.prestige+'! A fresh climb begins.');render();
+        toast('Prestige'+data.prestige+'! A fresh climb begins.');render();
       }catch(err){toast(friendlyErr(err,'Could not prestige right now'),'err');}
     }
     else if(act==='demoPlan'){const pl=a.getAttribute('data-plan');const cyc=a.getAttribute('data-cycle')||'monthly';if(DEMO_MODE){DEMO_ME.plan=pl;ME.plan=pl;if(pl!=='free'){location.hash='#payment-success?plan='+pl+'&cycle='+cyc;}else{toast('Now on the Free plan (demo)');render();}}else{toast('Upgrades are handled by an admin or via student verification.');}}
     else if(act==='redeemPromo'){const code=($('#promoInput')?.value||'').trim().toUpperCase();if(!code)return toast('Enter a code','err');
-      if(DEMO_MODE){const plan=DEMO_PROMO_CODES[code];if(!plan)return toast('Invalid or expired code','err');DEMO_ME.plan=plan;ME.plan=plan;toast('🎉 '+PLANS[plan].name+' plan activated!');render();return;}
+      if(DEMO_MODE){const plan=DEMO_PROMO_CODES[code];if(!plan)return toast('Invalid or expired code','err');DEMO_ME.plan=plan;ME.plan=plan;toast(''+PLANS[plan].name+' plan activated!');render();return;}
       // Validated server-side: the code list, single-use rule and plan write all
       // live in the database (see supabase/migration-2026-08-plan-security.sql).
       const btn=a;btn.disabled=true;
@@ -4579,18 +4749,18 @@ document.addEventListener('click',async(e)=>{
         if(error)throw error;
         if(!data?.ok)return toast(data?.error||'Invalid or expired code','err');
         await loadProfile();
-        toast('🎉 '+PLANS[data.plan].name+' plan activated!');render();
+        toast(''+PLANS[data.plan].name+' plan activated!');render();
       }catch(err){toast(friendlyErr(err,'Could not redeem that code'),'err');}
       finally{btn.disabled=false;}
     }
     else if(act==='togglePmForm'){const el=$('#pmForm');if(el)el.classList.toggle('hidden');}
-    else if(act==='savePm'){const brand=$('#pmBrand')?.value||'Card';const last4=($('#pmLast4')?.value||'').replace(/\D/g,'');const exp=($('#pmExp')?.value||'').trim();if(last4.length!==4)return toast('Enter the last 4 digits','err');if(!/^\d{2}\/\d{2}$/.test(exp))return toast('Expiry must be MM/YY','err');setPM({brand,last4,exp});toast('💳 Payment method saved');render();}
+    else if(act==='savePm'){const brand=$('#pmBrand')?.value||'Card';const last4=($('#pmLast4')?.value||'').replace(/\D/g,'');const exp=($('#pmExp')?.value||'').trim();if(last4.length!==4)return toast('Enter the last 4 digits','err');if(!/^\d{2}\/\d{2}$/.test(exp))return toast('Expiry must be MM/YY','err');setPM({brand,last4,exp});toast('Payment method saved');render();}
     else if(act==='removePm'){setPM(null);toast('Payment method removed');render();}
     else if(act==='adminLogin'){
       // Production admin comes from profiles.role, which clients cannot write.
       if(!DEMO_MODE)return toast('Admin access is granted from the database, not a code.','err');
       const code=($('#adminInput')?.value||'').trim();if(code!==DEMO_ADMIN_CODE)return toast('Incorrect access code','err');
-      localStorage.setItem('goalify_admin','1');toast('🛡️ Demo admin access granted');location.hash='#admin';}
+      localStorage.setItem('goalify_admin','1');toast('Demo admin access granted');location.hash='#admin';}
     else if(act==='adminLogout'){localStorage.removeItem('goalify_admin');toast('Admin signed out');render();}
     else if(act==='simPreset'){simPreset(a.getAttribute('data-preset'));}
     else if(act==='scPreset'){const k=a.getAttribute('data-key');SC_PRESET=k;const pr=SC_PRESETS.find(p=>p.key===k)||SC_PRESETS[0];const nameEl=document.getElementById('scName');const priceEl=document.getElementById('scPrice');const timesEl=document.getElementById('scTimes');if(nameEl)nameEl.value=pr.label;if(priceEl)priceEl.value=Math.round((priceFor(pr.key)||2)*100)/100;if(timesEl)timesEl.value=Math.max(1,freqFor(pr.key)||1);document.querySelectorAll('[data-action="scPreset"]').forEach(b=>{const sel=b.getAttribute('data-key')===k;b.style.background=sel?'linear-gradient(135deg,var(--accent1),var(--accent2))':'var(--glass)';b.style.color=sel?'#fff':'var(--muted)';});updateSpendCalc();}
@@ -4625,23 +4795,26 @@ document.addEventListener('click',async(e)=>{
     else if(act==='bizPrint'){window.print();}
     else if(act==='bizInvite'){toast('Live networking activates with real accounts (demo).');}
     else if(act==='bizReset'){if(confirm('Reset all business demo data?')){localStorage.removeItem('goalify_biz');toast('Business data reset');render();}}
-    else if(act==='shareCard'){try{makeShareCard();toast('Progress card downloaded 📤');}catch(e){toast('Could not generate card','err');}}
-    else if(act==='support'){toast('👏 You sent support to '+a.getAttribute('data-name')+'!');}
-    else if(act==='joinChallenge'){toast('⚔️ You joined the weekly challenge!');}
-    else if(act==='copyInvite'){const link=location.origin+location.pathname+'#invite';try{await navigator.clipboard.writeText(link);toast('🔗 Invite link copied!');}catch(e){toast('Invite link: '+link);}}
+    else if(act==='shareCard'){try{makeShareCard();toast('Progress card downloaded');}catch(e){toast('Could not generate card','err');}}
+    else if(act==='support'){toast('You sent support to'+a.getAttribute('data-name')+'!');}
+    else if(act==='joinChallenge'){toast('You joined the weekly challenge!');}
+    else if(act==='copyInvite'){const link=location.origin+location.pathname+'#invite';try{await navigator.clipboard.writeText(link);toast('Invite link copied!');}catch(e){toast('Invite link: '+link);}}
     else if(act==='findUser'){toast('No matching profiles yet — live once accounts are enabled.');}
     else if(act==='togglePay'){const el=document.getElementById('pay-'+a.getAttribute('data-id'));if(el)el.classList.toggle('hidden');}
-    else if(act==='copyRef'){const v=$('#refCode')?.value||referralCode();try{await navigator.clipboard.writeText(v);toast('🎁 Referral code copied!');}catch(e){toast('Code: '+v);}}
-    else if(act==='copyRefLink'){const v=$('#refLink')?.value||'';try{await navigator.clipboard.writeText(v);toast('🔗 Referral link copied!');}catch(e){toast('Link: '+v);}}
-    else if(act==='checkIn'){const r=doCheckIn();if(r.already){toast('Already checked in today ✓');}else{if(DEMO_MODE)DEMO_ME.xp=(DEMO_ME.xp||0)+10;else await sb.rpc('award_xp',{p_amount:10}).catch(()=>{});await loadProfile();toast('🔥 '+r.count+'-day streak! +10 XP');}render();}
+    else if(act==='copyRef'){const v=$('#refCode')?.value||referralCode();try{await navigator.clipboard.writeText(v);toast('Referral code copied!');}catch(e){toast('Code: '+v);}}
+    else if(act==='copyRefLink'){const v=$('#refLink')?.value||'';try{await navigator.clipboard.writeText(v);toast('Referral link copied!');}catch(e){toast('Link: '+v);}}
+    else if(act==='checkIn'){const r=doCheckIn();if(r.already){toast('Already checked in today ✓');}else{if(DEMO_MODE)DEMO_ME.xp=(DEMO_ME.xp||0)+10;else await sb.rpc('award_xp',{p_amount:10}).catch(()=>{});await loadProfile();toast(''+r.count+'-day streak! +10 XP');}render();}
     else if(act==='chalFilter'){CHAL_FILTER=+a.getAttribute('data-d');render();}
-    else if(act==='joinChal'){const k=a.getAttribute('data-key');const arr=chalState();if(!arr.find(c=>c.key===k)){arr.push({key:k,start:todayISO(),proofs:[],status:'active'});setChalState(arr);}toast('Challenge started — log proof daily 💪');render();}
-    else if(act==='applyOpp'){const ck=a.getAttribute('data-k');const cur=+((ME.budget||{})[ck])||0;const save=Math.round(cur*0.5);const key='save_'+ck;const arr=chalState();if(arr.find(x=>x.key===key)){toast('You already have this challenge','err');}else{arr.push({key,custom:true,title:'Halve '+catLabel(ck),desc:`Cut ${catLabel(ck).toLowerCase()} in half — about ${fmt(save)}/mo toward your goal.`,emoji:catEmoji(ck),days:14,xp:80,start:todayISO(),proofs:[],status:'active'});setChalState(arr);toast('⚡ Challenge added — log proof to earn XP & a badge!');}render();}
+    else if(act==='joinChal'){const k=a.getAttribute('data-key');const arr=chalState();if(!arr.find(c=>c.key===k)){arr.push({key:k,start:todayISO(),proofs:[],status:'active'});setChalState(arr);}toast('Challenge started — log proof daily');render();}
+    else if(act==='applyOpp'){const ck=a.getAttribute('data-k');const cur=+((ME.budget||{})[ck])||0;const save=Math.round(cur*0.5);const key='save_'+ck;const arr=chalState();if(arr.find(x=>x.key===key)){toast('You already have this challenge','err');}else{arr.push({key,custom:true,title:'Halve '+catLabel(ck),desc:`Cut ${catLabel(ck).toLowerCase()} in half — about ${fmt(save)}/mo toward your goal.`,emoji:catEmoji(ck),days:14,xp:80,start:todayISO(),proofs:[],status:'active'});setChalState(arr);toast('Challenge added — log proof to earn XP & a badge!');}render();}
     else if(act==='proofChal'){openProofModal(a.getAttribute('data-key'));}
-    else if(act==='reviewChal'){const k=a.getAttribute('data-key');const arr=chalState();const c=arr.find(x=>x.key===k);if(c){c.status='pending';setChalState(arr);}toast('Submitted for review — XP is granted after approval ⏳');render();}
+    else if(act==='reviewChal'){const k=a.getAttribute('data-key');const arr=chalState();const c=arr.find(x=>x.key===k);if(c){c.status='pending';setChalState(arr);}toast('Submitted for review — XP is granted after approval');render();}
     else if(act==='leaveChal'){const k=a.getAttribute('data-key');setChalState(chalState().filter(c=>c.key!==k));toast('Left challenge');render();}
     else if(act==='export'){let g=GOALS,x=EXPENSES;if(!DEMO_MODE){const u=SESSION?.user?.id;[{data:g},{data:x}]=await Promise.all([sb.from('goals').select('*').eq('user_id',u),sb.from('expenses').select('*').eq('user_id',u)]);}const blob=new Blob([JSON.stringify({profile:ME,goals:g,expenses:x},null,2)],{type:'application/json'});const u=URL.createObjectURL(blob);const el=document.createElement('a');el.href=u;el.download='goalify-data.json';el.click();URL.revokeObjectURL(u);toast('Exported goalify-data.json');}
     else if(act==='rmBudget'){await setBudget(a.getAttribute('data-cat'),0);toast('Budget removed');render();}
+    else if(act==='whatIf'){
+      document.querySelectorAll('.wi-chip').forEach(b=>b.classList.remove('on'));a.classList.add('on');
+      runWhatIf(a.getAttribute('data-cat'),+a.getAttribute('data-pct'));}
     else if(act==='exportCsv'){
       if(!caps(ME?.plan||'free').csvExport){toast('Spreadsheet export is a Pro feature','err');location.hash='#app/plans';return;}
       let x=EXPENSES;
@@ -4767,7 +4940,7 @@ document.addEventListener('submit',async(e)=>{
       if(lng){localStorage.setItem('goalify_lang',lng);}
       // seed onboarding state so the quiz can skip language & country (already collected here)
       if(typeof QA!=='undefined'&&QA){QA.lang=lng;QA.country=ctry||QA.country;}
-      if(DEMO_MODE){Object.assign(DEMO_ME,{first_name:fd.get('first_name')||'',last_name:fd.get('last_name')||'',email:fd.get('email')||DEMO_ME.email,birthdate:bd,country:ctry||DEMO_ME.country,language:lng,onboarded:false});toast('Welcome to Goalify! 🎉');location.hash='#quiz';return;}
+      if(DEMO_MODE){Object.assign(DEMO_ME,{first_name:fd.get('first_name')||'',last_name:fd.get('last_name')||'',email:fd.get('email')||DEMO_ME.email,birthdate:bd,country:ctry||DEMO_ME.country,language:lng,onboarded:false});toast('Welcome to Goalify!');location.hash='#quiz';return;}
       const btn=$('#signupBtn');btn.disabled=true;btn.textContent='Creating…';
       const email=fd.get('email');
       const redirectTo=location.protocol==='file:'?undefined:location.origin+(location.pathname==='/'?'':location.pathname);
@@ -4775,7 +4948,7 @@ document.addEventListener('submit',async(e)=>{
       btn.disabled=false;btn.textContent='Create account';
       if(error)return toast(error.message,'err');
       if(data.session){location.hash='#quiz';}
-      else{localStorage.setItem('goalify_pending_email',email);toast('We sent an 8-digit code to your email 📨');location.hash='#verify';}
+      else{localStorage.setItem('goalify_pending_email',email);toast('We sent an 8-digit code to your email');location.hash='#verify';}
     }
     else if(f.id==='otpForm'){
       if(window._verifying)return;                 // single request — no duplicate submits
@@ -4817,7 +4990,7 @@ document.addEventListener('submit',async(e)=>{
     }
     else if(f.id==='loginForm'){
       const fd=new FormData(f);
-      if(DEMO_MODE){toast('Welcome back! 👋');location.hash=DEMO_ME.onboarded?'#app/dashboard':'#quiz';return;}
+      if(DEMO_MODE){toast('Welcome back!');location.hash=DEMO_ME.onboarded?'#app/dashboard':'#quiz';return;}
       if(window._loginInFlight)return; // ignore double-taps while a request is already resolving
       if(fd.get('remember'))localStorage.setItem(REMEMBER,'1');else localStorage.removeItem(REMEMBER);
       const btn=$('#loginBtn');btn.disabled=true;btn.textContent='Logging in…';
@@ -4854,7 +5027,7 @@ document.addEventListener('submit',async(e)=>{
         window._loginInFlight=false;
         btn.textContent='Success ✓';
         try{await Promise.race([loadProfile(),new Promise(r=>setTimeout(r,6000))]);}catch(e){}
-        toast('Welcome back! 👋');
+        toast('Welcome back!');
         location.hash = isOnboarded() ? '#app/dashboard' : '#quiz';
       }catch(e){
         fail(e&&e.message==='__timeout__' ? 'Network is slow — please try again' : (e&&e.message));
@@ -4884,7 +5057,7 @@ document.addEventListener('submit',async(e)=>{
       if(sbtn)sbtn.textContent='Submitting…';
       const {error}=await sb.from('student_verifications').insert({user_id:SESSION.user.id,university:fd.get('university'),student_email:fd.get('student_email'),document_url:docUrl});
       if(error)return fail(error.message);
-      toast('Submitted! An admin will review it. 🎓');render();
+      toast('Submitted! An admin will review it.');render();
     }
   }catch(err){toast(err.message||'Error','err');}
 });
@@ -4913,7 +5086,7 @@ function openMissionModal(goalId){
     const cad=$('#mmCad').value;
     g.missions=g.missions||[];
     g.missions.push({id:'m'+Date.now(),goal_id:goalId,title,cadence:cad,perWeek:+$('#mmTarget').value||(cad==='daily'?5:1),difficulty:$('#mmDiff').value,status:'active'});
-    close();toast('Mission added 🎯');render();
+    close();toast('Mission added');render();
   });
 }
 
@@ -4940,7 +5113,7 @@ function openProofModal(key){
     const today=todayISO();
     if((c.proofs||[]).some(p=>p.day===today)){$('#pfErr').textContent='You already logged proof today.';return;}
     c.proofs=c.proofs||[];c.proofs.push({day:today,note,saved:+$('#pfSaved').value||0,reduced:$('#pfReduced').value.trim(),explanation:$('#pfExpl').value.trim()});
-    setChalState(arr);close();toast('Proof logged ✅');render();
+    setChalState(arr);close();toast('Proof logged');render();
   });
 }
 
