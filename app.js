@@ -50,20 +50,42 @@ const DEMO_GOALS = [
   ]},
   {id:'g3',user_id:'demo',name:'Summer Trip 🇬🇷',emoji:'✈️',image_url:null,target_amount:1500,saved_amount:1500,monthly_contribution:0,completed:true,status:'completed',created_at:'2024-03-01',missions:[]},
 ];
-const DEMO_EXPENSES = [
-  {id:'e1',user_id:'demo',amount:420,category:'groceries',merchant:'Lidl',spent_at:`${_mo}-02`},
-  {id:'e2',user_id:'demo',amount:85,category:'restaurants',merchant:'Sushi House',spent_at:`${_mo}-04`},
-  {id:'e3',user_id:'demo',amount:120,category:'shopping',merchant:'Zara',spent_at:`${_mo}-06`},
-  {id:'e4',user_id:'demo',amount:9.99,category:'subscriptions',merchant:'Netflix',spent_at:`${_mo}-01`},
-  {id:'e5',user_id:'demo',amount:65,category:'transportation',merchant:'Bus Pass',spent_at:`${_mo}-01`},
-  {id:'e6',user_id:'demo',amount:110,category:'restaurants',merchant:'Various',spent_at:`${_mo}-10`},
-  {id:'e7',user_id:'demo',amount:180,category:'shopping',merchant:'Online',spent_at:`${_mo}-12`},
-  {id:'e8',user_id:'demo',amount:45,category:'entertainment',merchant:'Cinema',spent_at:`${_mo}-14`},
-  {id:'e9',user_id:'demo',amount:12.99,category:'subscriptions',merchant:'Spotify',spent_at:`${_mo}-01`},
-  {id:'e10',user_id:'demo',amount:90,category:'transportation',merchant:'Fuel',spent_at:`${_mo}-08`},
-  {id:'e11',user_id:'demo',amount:55,category:'fastfood',merchant:'McDonald\'s',spent_at:`${_mo}-09`},
-  {id:'e12',user_id:'demo',amount:38,category:'entertainment',merchant:'Bowling',spent_at:`${_mo}-16`},
-];
+// Formatted from local parts on purpose: toISOString() converts to UTC, which
+// tips the 1st of the month back into the previous month east of Greenwich.
+const _demoMonth=(back)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-back);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;};
+// Four months of history, so spending trends and the recurring-charge detector
+// have something real to chew on. Index 0 is the current month.
+const DEMO_EXPENSES=(()=>{
+  const rows=[];let n=0;
+  const add=(mo,day,amount,category,merchant)=>
+    rows.push({id:'e'+(++n),user_id:'demo',amount,category,merchant,spent_at:`${mo}-${String(day).padStart(2,'0')}`});
+  // amount may be a per-month array (index 0 = current month) to model price changes
+  const recurring=[
+    [1,9.99,'subscriptions','Netflix'],
+    [1,[12.99,10.99,10.99,10.99,10.99],'subscriptions','Spotify'],   // price went up this month
+    [3,29.90,'subscriptions','FitPlus Gym'],
+    [5,15.99,'utilities','Mobile plan'],
+    [1,65,'transportation','Bus Pass'],
+  ];
+  // Deliberately irregular: real grocery runs and fill-ups vary in size and
+  // timing, so they should NOT be mistaken for a fixed commitment.
+  const variable=[
+    [[3,78,'groceries','Lidl'],[11,132,'groceries','Lidl'],[19,95,'groceries','Lidl'],[26,141,'groceries','Lidl'],[4,85,'restaurants','Sushi House'],[6,120,'shopping','Zara'],[9,55,'fastfood',"McDonald's"],[14,45,'entertainment','Cinema'],[8,62,'transportation','Fuel'],[21,104,'transportation','Fuel']],
+    [[2,124,'groceries','Lidl'],[9,71,'groceries','Lidl'],[17,148,'groceries','Lidl'],[24,88,'groceries','Lidl'],[7,70,'restaurants','Trattoria'],[11,140,'shopping','Zara'],[13,48,'fastfood','Burger King'],[18,95,'transportation','Fuel']],
+    [[4,91,'groceries','Lidl'],[12,137,'groceries','Lidl'],[21,76,'groceries','Lidl'],[8,62,'restaurants','Pho Corner'],[15,210,'shopping','IKEA'],[27,118,'transportation','Fuel']],
+    [[5,145,'groceries','Lidl'],[13,82,'groceries','Lidl'],[22,127,'groceries','Lidl'],[9,74,'restaurants','Kantina'],[17,130,'shopping','Mango'],[20,67,'transportation','Fuel']],
+    [[6,99,'groceries','Lidl'],[15,136,'groceries','Lidl'],[24,84,'groceries','Lidl'],[10,58,'fastfood','Kebab House'],[19,112,'shopping','Decathlon'],[23,73,'transportation','Fuel']],
+  ];
+  for(let back=0;back<5;back++){
+    const mo=_demoMonth(back);
+    recurring.forEach(([day,amount,category,merchant])=>
+      add(mo,day,Array.isArray(amount)?amount[back]:amount,category,merchant));
+    // a lapsed service: billed for two months, then stopped
+    if(back>=2)add(mo,7,4.99,'subscriptions','CloudDrive');
+    variable[back].forEach(([day,amount,category,merchant])=>add(mo,day,amount,category,merchant));
+  }
+  return rows;
+})();
 
 // -------------------- constants --------------------
 const PLANS = {
@@ -93,7 +115,11 @@ const PLAN_FEATURES={
   business:['A complete business OS','Companies, employees & assets','Invoices, payments & taxes','Cash flow, net worth & reports','Executive gold interface','No games — pure operations'],
 };
 // ── central capability map: the single source of truth for plan gating ──
+// NOTE: this runs in the browser, so it decides what to *show*, not what a
+// determined user can reach. Anything that costs money or protects data has to
+// be enforced in the database too — see supabase/migration-2026-08-plan-*.sql.
 function caps(plan){
+  const paid=PLAN_ORDER.indexOf(plan)>=PLAN_ORDER.indexOf('pro');
   return {
     goalLimit: plan==='free'?3:-1,
     canDelete: plan!=='free',
@@ -105,7 +131,36 @@ function caps(plan){
     engage: true,   // Analytics, Future Simulator, Impact, Challenges — free on every plan (V3)
     ai: plan==='premium',
     reports: plan==='premium',
+    // ── Free-tier ceilings. Free stays genuinely useful; Pro removes the caps. ──
+    history: paid?'all':'month',   // how far back charts and trends may look
+    recurringLimit: paid?-1:3,     // free sees its 3 biggest repeat charges
+    budgetLimit: paid?-1:2,        // free can cap 2 categories
+    csvExport: paid,               // spreadsheet export is a Pro convenience
   };
+}
+// Chart timeframe switcher. Free is capped to the last month of history; the
+// longer ranges render as locked chips that route to the plans page.
+function timeframeTabs(opts){
+  const c=caps(ME?.plan||'free'),freeOnly=c.history==='month';
+  return opts.map(([id,label],i)=>{
+    const locked=freeOnly&&id!=='month';
+    const on=i===(freeOnly?0:1);   // free defaults to Month, paid to Year
+    if(locked)return `<a href="#app/plans" class="rounded-lg px-2.5 py-1.5 text-center font-semibold tf-locked" title="Pro unlocks full history" style="color:var(--muted)">${ICON('lock','ic-xs')} ${label}</a>`;
+    return `<button data-action="tf" data-tf="${id}" class="rounded-lg px-2.5 py-1.5 text-center font-semibold ${on?'text-white':''}" style="${on?'background:linear-gradient(90deg,var(--accent1),var(--accent2))':'color:var(--muted)'}">${label}</button>`;
+  }).join('');
+}
+// The range a chart should open on for this plan.
+function defaultTF(){return caps(ME?.plan||'free').history==='month'?'month':'year';}
+// Reusable "this is a Pro thing" panel, so every gate looks the same.
+function upsellCard(title,blurb,cta){
+  return `<a href="#app/plans" class="block glass rounded-2xl p-5 glass-hover upsell-card">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="min-w-0">
+        <div class="flex items-center gap-2">${ICON('lock','ic-sm')}<h3 class="font-semibold">${title}</h3></div>
+        <p class="mt-1 text-sm" style="color:var(--muted)">${blurb}</p>
+      </div>
+      <span class="btn btn-primary !py-2 text-sm shrink-0">${cta||'Upgrade to Pro'} →</span>
+    </div></a>`;
 }
 // ============================================================
 // i18n — language selector + DOM translation (en/sq/de/es/it)
@@ -134,11 +189,11 @@ const I18N={
   'Features':'Veçoritë','Pricing':'Çmimet','FAQ':'Pyetje','Get started →':'Fillo →','Turn Every Euro':'Kthe çdo Euro','Into Progress.':'Në progres.','AI-powered financial coaching':'Trajnim financiar me AI','Start for free →':'Fillo falas →','No credit card required · Students get Pro free':'Pa kartë krediti · Studentët marrin Pro falas','Everything you need to':'Gjithçka që ju duhet për të','win with money':'fituar me para','Simple, honest pricing':'Çmime të thjeshta e të ndershme','Get started':'Fillo','Most popular':'Më i popullarizuari','Questions, answered':'Pyetje, përgjigje','Is Goalify really free?':'A është Goalify vërtet falas?','How do students get Pro free?':'Si i marrin studentët Pro falas?','Is my data secure?':'A janë të dhënat e mia të sigurta?','How does the AI work?':'Si funksionon AI?','Turn every euro into progress':'Kthe çdo euro në progres','All rights reserved.':'Të gjitha të drejtat e rezervuara.',
   'Are you currently a student?':'A jeni aktualisht student?','What is your employment status?':'Cili është statusi juaj i punësimit?','What is your monthly income?':'Sa janë të ardhurat tuaja mujore?','How much do you save per month?':'Sa kurseni në muaj?','What are your financial goals?':'Cilat janë qëllimet tuaja financiare?','Which describe your money habits?':'Cilat përshkruajnë zakonet tuaja me paratë?','Select all that apply.':'Zgjidhni të gjitha që vlejnë.','Your monthly spending':'Shpenzimet tuaja mujore','Enter what you spend per category (leave 0 if none).':'Shkruani sa shpenzoni për kategori (lini 0 nëse asgjë).','Analyzing your finances…':'Duke analizuar financat tuaja…','Your money personality':'Personaliteti juaj me paratë','Income':'Të ardhura','Recommendations':'Rekomandime','Go to dashboard →':'Shko te paneli →','Continue →':'Vazhdo →','← Back':'← Mbrapa','No, not a student':'Jo, nuk jam student','Yes, full-time':'Po, me kohë të plotë','Yes, part-time':'Po, me kohë të pjesshme','Employed full-time':'I punësuar me kohë të plotë','Employed part-time':'I punësuar me kohë të pjesshme','Self-employed':'I vetëpunësuar','Not working':'Pa punë','Student':'Student','Emergency fund':'Fond emergjence','Big purchase':'Blerje e madhe','Invest & grow':'Investo & rrit','Pay off debt':'Shlyej borxhin','Travel':'Udhëtim','Stop overspending':'Ndal tepërshpenzimin','I plan purchases':'Planifikoj blerjet','I buy on impulse':'Blej në impuls','I spend on experiences':'Shpenzoj për përvoja','I track everything':'Ndjek gjithçka','I have many subscriptions':'Kam shumë abonime','I prefer saving':'Preferoj të kursej',
   'Top goal':'Qëllimi kryesor','Still needed':'Ende nevojitet','Time left':'Koha e mbetur','Per day':'Në ditë','set a plan':'vendos një plan','check-ins':'regjistrime','best streak':'seria më e mirë','active goals':'qëllime aktive','Streak health':'Shëndeti i serisë','Share weekly progress':'Ndaj progresin javor','Today\'s missions':'Misionet e sotme','done today':'bërë sot','Manage missions →':'Menaxho misionet →','What to reduce':'Çfarë të zvogëlohet','per month':'në muaj','Total potential':'Potenciali total','Add some expenses and Goalify will show exactly where to cut.':'Shto disa shpenzime dhe Goalify do të tregojë saktësisht ku të presësh.','No active goal yet':'Asnjë qëllim aktiv ende','Set a goal and Goalify shows exactly what to cut to reach it faster.':'Vendos një qëllim dhe Goalify tregon saktësisht çfarë të presësh për ta arritur më shpejt.','+ Create a goal':'+ Krijo një qëllim','🎉 All caught up for today — nice work!':'🎉 Çdo gjë e kryer për sot — punë e mirë!','AI Insights':'Njohuri AI','Generating…':'Duke gjeneruar…','Open AI Coach →':'Hap Trajnerin AI →','Open Simulator →':'Hap Simulatorin →','See plans →':'Shih planet →','On track':'Në rrugë të mirë','Over budget':'Mbi buxhet','all-time':'gjithë kohërave','Goalify Score':'Pikët Goalify','Money Health':'Shëndeti i parasë','This week':'Këtë javë','Strong':'I fortë','Stable':'I qëndrueshëm','Weak':'I dobët','Critical':'Kritik','Unlock Pro':'Zhblloko Pro','Verify student status for free Pro.':'Verifiko statusin e studentit për Pro falas.','Verify now':'Verifiko tani','Explore Pro →':'Eksploro Pro →','Free perk: Achievements':'Përfitim falas: Arritjet','AI behaviour coach':'Trajner sjelljeje AI','plan':'plan','+ New goal':'+ Qëllim i ri',
-  'Long-term goals, broken into weekly missions you check in on.':'Qëllime afatgjata, të ndara në misione javore që i regjistroni.','Unlimited goals.':'Qëllime të pakufizuara.','Free — archived goals still count':'Falas — qëllimet e arkivuara ende numërohen','No missions yet — add the weekly actions that drive this goal.':'Asnjë mision ende — shto veprimet javore që çojnë te ky qëllim.','Archived':'Të arkivuara','Active · Private':'Aktiv · Privat','✓ Completed':'✓ Përfunduar','📦 Archived':'📦 Arkivuar','Daily':'Çdo ditë','Weekly':'Javore','this week':'këtë javë','Easy':'Lehtë','Medium':'Mesatare','Hard':'Vështirë','+ Add mission':'+ Shto mision','Missions':'Misionet','No goals yet':'Asnjë qëllim ende','Create your first goal, then add missions that drive it.':'Krijo qëllimin tënd të parë, pastaj shto misionet që e çojnë.','Make private':'Bëje privat','Make public':'Bëje publik','Add €':'Shto €','Archive':'Arkivo','Restore':'Rikthe','No active goals.':'Asnjë qëllim aktiv.',
+  'Long-term goals, broken into weekly missions you check in on.':'Qëllime afatgjata, të ndara në misione javore që i regjistroni.','Unlimited goals.':'Qëllime të pakufizuara.','Free — archived goals still count':'Falas — qëllimet e arkivuara ende numërohen','No missions yet. Add the weekly actions that drive this goal.':'Asnjë mision ende — shto veprimet javore që çojnë te ky qëllim.','Archived':'Të arkivuara','Active · Private':'Aktiv · Privat','✓ Completed':'✓ Përfunduar','📦 Archived':'📦 Arkivuar','Daily':'Çdo ditë','Weekly':'Javore','this week':'këtë javë','Easy':'Lehtë','Medium':'Mesatare','Hard':'Vështirë','+ Add mission':'+ Shto mision','Missions':'Misionet','No goals yet':'Asnjë qëllim ende','Create your first goal, then add missions that drive it.':'Krijo qëllimin tënd të parë, pastaj shto misionet që e çojnë.','Make private':'Bëje privat','Make public':'Bëje publik','Add €':'Shto €','Archive':'Arkivo','Restore':'Rikthe','No active goals.':'Asnjë qëllim aktiv.',
   'Track expenses and explore spending across every timeframe.':'Ndjek shpenzimet dhe eksploro shpenzimin në çdo periudhë.','Add expense':'Shto shpenzim','Amount (€)':'Shuma (€)','Category':'Kategoria','Merchant':'Tregtari','Date':'Data','optional':'opsionale','Recent transactions':'Transaksionet e fundit','No transactions yet.':'Asnjë transaksion ende.','+ Add expense':'+ Shto shpenzim','1 Month':'1 Muaj','1 Year':'1 Vit','5 Years':'5 Vjet','No spending this month yet.':'Asnjë shpenzim këtë muaj ende.',
   'Model your savings, goal dates and growth.':'Modelo kursimet, datat e qëllimeve dhe rritjen.','Your inputs':'Të dhënat tuaja','Monthly expenses':'Shpenzime mujore','Savings goal':'Qëllimi i kursimit','Annual growth':'Rritja vjetore','Monthly savings':'Kursime mujore','Goal reached in':'Qëllimi arritur në','In 5 years':'Në 5 vjet','5-year projection':'Projeksion 5-vjeçar','Milestones on the way':'Pikë referimi gjatë rrugës','Try a scenario':'Provo një skenar','Cut €100/mo more':'Pres €100/muaj më shumë','Save aggressively':'Kurse agresivisht','Invest at 7%':'Investo me 7%','Reset':'Rivendos','your goal':'qëllimi yt','out of range':'jashtë intervalit','Increase your monthly saving to unlock milestones.':'Rrit kursimin mujor për të zhbllokuar pikët e referimit.','Now':'Tani','in':'në',
   'Real AI financial coaching.':'Trajnim financiar i vërtetë me AI.','Today:':'Sot:','messages':'mesazhe','Unlimited':'Të pakufizuara','Coach personality':'Personaliteti i trajnerit','Ask your AI coach…':'Pyet trajnerin tënd AI…','How am I doing this week?':'Si po ia dal këtë javë?','How can I save more?':'Si mund të kursej më shumë?','Where am I overspending?':'Ku po shpenzoj tepër?','Roast my spending':'Kritiko shpenzimet e mia','Chill Coach':'Trajner i qetë','Fun Coach':'Trajner argëtues','Strict Coach':'Trajner i rreptë','Roast Mode':'Modaliteti kritik','Soft, supportive tone':'Ton i butë, mbështetës','Upbeat & motivational':'Energjik & motivues','Direct, no fluff':'Direkt, pa fjalë boshe','Light humor, keeps it real':'Humor i lehtë, mbetet real',
-  'Real challenges with proof — XP is granted only after your evidence is reviewed. No instant completion.':'Sfida reale me prova — XP jepet vetëm pasi prova juaj shqyrtohet. Pa përfundim të menjëhershëm.','Check-in streak':'Seria e regjistrimeve','Check in (+10 XP)':'Regjistrohu (+10 XP)','✓ Checked in today':'✓ Regjistruar sot','Your active challenges':'Sfidat tuaja aktive','Challenge catalog':'Katalogu i sfidave','All':'Të gjitha','1 day':'1 ditë','7 days':'7 ditë','14 days':'14 ditë','In progress':'Në vazhdim','Start challenge':'Fillo sfidën','Awaiting admin review':'Në pritje të shqyrtimit','Proof submitted — XP is granted only after approval.':'Prova u dërgua — XP jepet vetëm pas miratimit.','+ Log today\'s proof':'+ Regjistro provën e sotme','Submit for review':'Dërgo për shqyrtim','Leave':'Largohu','earned':'fituar','Badges':'Stema','Day':'Dita','of':'nga','proof':'provë','proofs':'prova','logged':'regjistruar','XP total':'XP gjithsej',
+  'Real challenges with proof. XP is granted only after your evidence is reviewed. No instant completion.':'Sfida reale me prova — XP jepet vetëm pasi prova juaj shqyrtohet. Pa përfundim të menjëhershëm.','Check-in streak':'Seria e regjistrimeve','Check in (+10 XP)':'Regjistrohu (+10 XP)','✓ Checked in today':'✓ Regjistruar sot','Your active challenges':'Sfidat tuaja aktive','Challenge catalog':'Katalogu i sfidave','All':'Të gjitha','1 day':'1 ditë','7 days':'7 ditë','14 days':'14 ditë','In progress':'Në vazhdim','Start challenge':'Fillo sfidën','Awaiting admin review':'Në pritje të shqyrtimit','Proof submitted — XP is granted only after approval.':'Prova u dërgua — XP jepet vetëm pas miratimit.','+ Log today\'s proof':'+ Regjistro provën e sotme','Submit for review':'Dërgo për shqyrtim','Leave':'Largohu','earned':'fituar','Badges':'Stema','Day':'Dita','of':'nga','proof':'provë','proofs':'prova','logged':'regjistruar','XP total':'XP gjithsej',
   'Follow people and share your wins. Upgrade to Premium for the full feed, reactions and goal memories.':'Ndiq njerëz dhe ndaj fitoret e tua. Përmirëso në Premium për furnizimin e plotë, reagime dhe kujtime qëllimesh.','Search by username…':'Kërko sipas emrit të përdoruesit…','No profiles to show yet. Real people appear here once accounts go live — no placeholder users.':'Asnjë profil për të shfaqur ende. Njerëz realë shfaqen këtu kur llogaritë aktivizohen — pa përdorues fiktivë.','Your achievement cards':'Kartat tuaja të arritjeve','Achievement cards':'Kartat e arritjeve','Complete a goal to unlock a shareable achievement card.':'Përfundo një qëllim për të zhbllokuar një kartë arritjeje për t\'u ndarë.','Goal memories':'Kujtime qëllimesh','progress history':'historiku i progresit','Your feed is empty. When people you follow share goals, their updates show here — with reactions. No fake posts.':'Furnizimi yt është bosh. Kur njerëzit që ndiqni ndajnë qëllime, përditësimet e tyre shfaqen këtu — me reagime. Pa postime të rreme.','Your progress history builds here as you work toward goals.':'Historiku yt i progresit ndërtohet këtu ndërsa punon drejt qëllimeve.','✨ Premium unlocks the social feed, reactions, profile banners and goal memories.':'✨ Premium zhbllokon furnizimin social, reagimet, banderolat e profilit dhe kujtimet e qëllimeve.','Your network, feed, achievement cards and goal memories.':'Rrjeti, furnizimi, kartat e arritjeve dhe kujtimet e qëllimeve.','reached 🎉':'arritur 🎉','Share':'Ndaj',
   'Student Verification':'Verifikimi i studentit','Verify your student status to unlock':'Verifiko statusin tënd të studentit për të zhbllokuar','Pro free for 2 years':'Pro falas për 2 vjet','All fields are required.':'Të gjitha fushat janë të detyrueshme.','University / Institution *':'Universiteti / Institucioni *','Student email *':'Email studenti *','Proof document * (student ID or enrolment letter)':'Dokument prove * (kartë studenti ose letër regjistrimi)','Submit for verification':'Dërgo për verifikim','An admin reviews every request. On approval your plan upgrades to Pro for 2 years automatically.':'Një admin shqyrton çdo kërkesë. Pas miratimit plani juaj përmirësohet në Pro për 2 vjet automatikisht.','Student verification is not available in demo mode.':'Verifikimi i studentit nuk është i disponueshëm në modalitetin demo.',
   'Groceries':'Ushqime','Gas/Fuel':'Karburant','Shopping':'Pazar','Restaurants':'Restorante','Fast Food':'Ushqim i shpejtë','Cigarettes':'Cigare','Entertainment':'Argëtim','Subscriptions':'Abonime','Transportation':'Transport','Rent':'Qira','Utilities':'Shërbime','Education':'Arsim','Other':'Tjetër','Savings':'Kursime',
@@ -157,11 +212,11 @@ const I18N={
   'Features':'Funktionen','Pricing':'Preise','FAQ':'FAQ','Get started →':'Loslegen →','Turn Every Euro':'Verwandle jeden Euro','Into Progress.':'In Fortschritt.','AI-powered financial coaching':'KI-gestütztes Finanzcoaching','Start for free →':'Kostenlos starten →','No credit card required · Students get Pro free':'Keine Kreditkarte · Studenten erhalten Pro gratis','Everything you need to':'Alles was du brauchst, um','win with money':'mit Geld zu gewinnen','Simple, honest pricing':'Einfache, ehrliche Preise','Get started':'Loslegen','Most popular':'Am beliebtesten','Questions, answered':'Fragen, beantwortet','Is Goalify really free?':'Ist Goalify wirklich kostenlos?','How do students get Pro free?':'Wie erhalten Studenten Pro gratis?','Is my data secure?':'Sind meine Daten sicher?','How does the AI work?':'Wie funktioniert die KI?','Turn every euro into progress':'Verwandle jeden Euro in Fortschritt','All rights reserved.':'Alle Rechte vorbehalten.',
   'Are you currently a student?':'Bist du derzeit Student?','What is your employment status?':'Wie ist dein Beschäftigungsstatus?','What is your monthly income?':'Wie hoch ist dein Monatseinkommen?','How much do you save per month?':'Wie viel sparst du pro Monat?','What are your financial goals?':'Was sind deine finanziellen Ziele?','Which describe your money habits?':'Was beschreibt deine Geldgewohnheiten?','Select all that apply.':'Wähle alles Zutreffende.','Your monthly spending':'Deine monatlichen Ausgaben','Enter what you spend per category (leave 0 if none).':'Gib ein, was du pro Kategorie ausgibst (0 wenn keine).','Analyzing your finances…':'Analysiere deine Finanzen…','Your money personality':'Deine Geldpersönlichkeit','Income':'Einkommen','Recommendations':'Empfehlungen','Go to dashboard →':'Zur Übersicht →','Continue →':'Weiter →','← Back':'← Zurück','No, not a student':'Nein, kein Student','Yes, full-time':'Ja, Vollzeit','Yes, part-time':'Ja, Teilzeit','Employed full-time':'Vollzeit angestellt','Employed part-time':'Teilzeit angestellt','Self-employed':'Selbstständig','Not working':'Nicht berufstätig','Student':'Student','Emergency fund':'Notgroschen','Big purchase':'Große Anschaffung','Invest & grow':'Investieren & wachsen','Pay off debt':'Schulden tilgen','Travel':'Reisen','Stop overspending':'Überausgaben stoppen','I plan purchases':'Ich plane Käufe','I buy on impulse':'Ich kaufe impulsiv','I spend on experiences':'Ich gebe für Erlebnisse aus','I track everything':'Ich verfolge alles','I have many subscriptions':'Ich habe viele Abos','I prefer saving':'Ich spare lieber',
   'Top goal':'Hauptziel','Still needed':'Noch nötig','Time left':'Verbleibende Zeit','Per day':'Pro Tag','set a plan':'Plan festlegen','check-ins':'Check-ins','best streak':'beste Serie','active goals':'aktive Ziele','Streak health':'Serien-Zustand','Share weekly progress':'Wöchentlichen Fortschritt teilen','Today\'s missions':'Heutige Missionen','done today':'heute erledigt','Manage missions →':'Missionen verwalten →','What to reduce':'Was reduzieren','per month':'pro Monat','Total potential':'Gesamtpotenzial','Add some expenses and Goalify will show exactly where to cut.':'Füge Ausgaben hinzu und Goalify zeigt genau, wo du sparen kannst.','No active goal yet':'Noch kein aktives Ziel','Set a goal and Goalify shows exactly what to cut to reach it faster.':'Setze ein Ziel und Goalify zeigt genau, was du kürzen musst, um es schneller zu erreichen.','+ Create a goal':'+ Ziel erstellen','🎉 All caught up for today — nice work!':'🎉 Alles für heute erledigt — gut gemacht!','AI Insights':'KI-Einblicke','Generating…':'Wird erstellt…','Open AI Coach →':'KI-Coach öffnen →','Open Simulator →':'Simulator öffnen →','See plans →':'Tarife ansehen →','On track':'Im Plan','Over budget':'Über Budget','all-time':'insgesamt','Goalify Score':'Goalify-Wert','Money Health':'Finanzgesundheit','This week':'Diese Woche','Strong':'Stark','Stable':'Stabil','Weak':'Schwach','Critical':'Kritisch','Unlock Pro':'Pro freischalten','Verify student status for free Pro.':'Studentenstatus für gratis Pro verifizieren.','Verify now':'Jetzt verifizieren','Explore Pro →':'Pro entdecken →','Free perk: Achievements':'Gratis-Vorteil: Erfolge','AI behaviour coach':'KI-Verhaltenscoach','plan':'Tarif','+ New goal':'+ Neues Ziel',
-  'Long-term goals, broken into weekly missions you check in on.':'Langfristige Ziele, aufgeteilt in wöchentliche Missionen mit Check-ins.','Unlimited goals.':'Unbegrenzte Ziele.','Free — archived goals still count':'Gratis — archivierte Ziele zählen weiter','No missions yet — add the weekly actions that drive this goal.':'Noch keine Missionen — füge die wöchentlichen Aktionen für dieses Ziel hinzu.','Archived':'Archiviert','Active · Private':'Aktiv · Privat','✓ Completed':'✓ Abgeschlossen','📦 Archived':'📦 Archiviert','Daily':'Täglich','Weekly':'Wöchentlich','this week':'diese Woche','Easy':'Leicht','Medium':'Mittel','Hard':'Schwer','+ Add mission':'+ Mission hinzufügen','Missions':'Missionen','No goals yet':'Noch keine Ziele','Create your first goal, then add missions that drive it.':'Erstelle dein erstes Ziel und füge dann Missionen hinzu.','Make private':'Privat machen','Make public':'Öffentlich machen','Add €':'€ hinzufügen','Archive':'Archivieren','Restore':'Wiederherstellen','No active goals.':'Keine aktiven Ziele.',
+  'Long-term goals, broken into weekly missions you check in on.':'Langfristige Ziele, aufgeteilt in wöchentliche Missionen mit Check-ins.','Unlimited goals.':'Unbegrenzte Ziele.','Free — archived goals still count':'Gratis — archivierte Ziele zählen weiter','No missions yet. Add the weekly actions that drive this goal.':'Noch keine Missionen — füge die wöchentlichen Aktionen für dieses Ziel hinzu.','Archived':'Archiviert','Active · Private':'Aktiv · Privat','✓ Completed':'✓ Abgeschlossen','📦 Archived':'📦 Archiviert','Daily':'Täglich','Weekly':'Wöchentlich','this week':'diese Woche','Easy':'Leicht','Medium':'Mittel','Hard':'Schwer','+ Add mission':'+ Mission hinzufügen','Missions':'Missionen','No goals yet':'Noch keine Ziele','Create your first goal, then add missions that drive it.':'Erstelle dein erstes Ziel und füge dann Missionen hinzu.','Make private':'Privat machen','Make public':'Öffentlich machen','Add €':'€ hinzufügen','Archive':'Archivieren','Restore':'Wiederherstellen','No active goals.':'Keine aktiven Ziele.',
   'Track expenses and explore spending across every timeframe.':'Verfolge Ausgaben und analysiere sie über jeden Zeitraum.','Add expense':'Ausgabe hinzufügen','Amount (€)':'Betrag (€)','Category':'Kategorie','Merchant':'Händler','Date':'Datum','optional':'optional','Recent transactions':'Letzte Transaktionen','No transactions yet.':'Noch keine Transaktionen.','+ Add expense':'+ Ausgabe hinzufügen','1 Month':'1 Monat','1 Year':'1 Jahr','5 Years':'5 Jahre','No spending this month yet.':'Diesen Monat noch keine Ausgaben.',
   'Model your savings, goal dates and growth.':'Modelliere Ersparnisse, Zieldaten und Wachstum.','Your inputs':'Deine Eingaben','Monthly expenses':'Monatliche Ausgaben','Savings goal':'Sparziel','Annual growth':'Jährliches Wachstum','Monthly savings':'Monatliche Ersparnis','Goal reached in':'Ziel erreicht in','In 5 years':'In 5 Jahren','5-year projection':'5-Jahres-Prognose','Milestones on the way':'Meilensteine unterwegs','Try a scenario':'Szenario testen','Cut €100/mo more':'€100/Monat mehr kürzen','Save aggressively':'Aggressiv sparen','Invest at 7%':'Mit 7% investieren','Reset':'Zurücksetzen','your goal':'dein Ziel','out of range':'außerhalb des Bereichs','Increase your monthly saving to unlock milestones.':'Erhöhe deine monatliche Ersparnis, um Meilensteine freizuschalten.','Now':'Jetzt','in':'in',
   'Real AI financial coaching.':'Echtes KI-Finanzcoaching.','Today:':'Heute:','messages':'Nachrichten','Unlimited':'Unbegrenzt','Coach personality':'Coach-Persönlichkeit','Ask your AI coach…':'Frage deinen KI-Coach…','How am I doing this week?':'Wie läuft es diese Woche?','How can I save more?':'Wie kann ich mehr sparen?','Where am I overspending?':'Wo gebe ich zu viel aus?','Roast my spending':'Kritisiere meine Ausgaben','Chill Coach':'Entspannter Coach','Fun Coach':'Lustiger Coach','Strict Coach':'Strenger Coach','Roast Mode':'Roast-Modus','Soft, supportive tone':'Sanfter, unterstützender Ton','Upbeat & motivational':'Motivierend & positiv','Direct, no fluff':'Direkt, ohne Geschwafel','Light humor, keeps it real':'Leichter Humor, bleibt ehrlich',
-  'Real challenges with proof — XP is granted only after your evidence is reviewed. No instant completion.':'Echte Herausforderungen mit Nachweis — XP gibt es erst nach Prüfung deines Nachweises. Kein sofortiger Abschluss.','Check-in streak':'Check-in-Serie','Check in (+10 XP)':'Einchecken (+10 XP)','✓ Checked in today':'✓ Heute eingecheckt','Your active challenges':'Deine aktiven Herausforderungen','Challenge catalog':'Herausforderungs-Katalog','All':'Alle','1 day':'1 Tag','7 days':'7 Tage','14 days':'14 Tage','In progress':'Läuft','Start challenge':'Herausforderung starten','Awaiting admin review':'Wartet auf Prüfung','Proof submitted — XP is granted only after approval.':'Nachweis eingereicht — XP gibt es erst nach Genehmigung.','+ Log today\'s proof':'+ Heutigen Nachweis erfassen','Submit for review':'Zur Prüfung einreichen','Leave':'Verlassen','earned':'verdient','Badges':'Abzeichen','Day':'Tag','of':'von','proof':'Nachweis','proofs':'Nachweise','logged':'erfasst','XP total':'XP gesamt',
+  'Real challenges with proof. XP is granted only after your evidence is reviewed. No instant completion.':'Echte Herausforderungen mit Nachweis — XP gibt es erst nach Prüfung deines Nachweises. Kein sofortiger Abschluss.','Check-in streak':'Check-in-Serie','Check in (+10 XP)':'Einchecken (+10 XP)','✓ Checked in today':'✓ Heute eingecheckt','Your active challenges':'Deine aktiven Herausforderungen','Challenge catalog':'Herausforderungs-Katalog','All':'Alle','1 day':'1 Tag','7 days':'7 Tage','14 days':'14 Tage','In progress':'Läuft','Start challenge':'Herausforderung starten','Awaiting admin review':'Wartet auf Prüfung','Proof submitted — XP is granted only after approval.':'Nachweis eingereicht — XP gibt es erst nach Genehmigung.','+ Log today\'s proof':'+ Heutigen Nachweis erfassen','Submit for review':'Zur Prüfung einreichen','Leave':'Verlassen','earned':'verdient','Badges':'Abzeichen','Day':'Tag','of':'von','proof':'Nachweis','proofs':'Nachweise','logged':'erfasst','XP total':'XP gesamt',
   'Follow people and share your wins. Upgrade to Premium for the full feed, reactions and goal memories.':'Folge Leuten und teile deine Erfolge. Upgrade auf Premium für den vollen Feed, Reaktionen und Ziel-Erinnerungen.','Search by username…':'Nach Benutzername suchen…','No profiles to show yet. Real people appear here once accounts go live — no placeholder users.':'Noch keine Profile. Echte Leute erscheinen hier, sobald Konten aktiv sind — keine Platzhalter.','Your achievement cards':'Deine Erfolgskarten','Achievement cards':'Erfolgskarten','Complete a goal to unlock a shareable achievement card.':'Schließe ein Ziel ab, um eine teilbare Erfolgskarte freizuschalten.','Goal memories':'Ziel-Erinnerungen','progress history':'Fortschrittsverlauf','Your feed is empty. When people you follow share goals, their updates show here — with reactions. No fake posts.':'Dein Feed ist leer. Wenn Leute, denen du folgst, Ziele teilen, erscheinen ihre Updates hier — mit Reaktionen. Keine Fake-Posts.','Your progress history builds here as you work toward goals.':'Dein Fortschrittsverlauf entsteht hier, während du an Zielen arbeitest.','✨ Premium unlocks the social feed, reactions, profile banners and goal memories.':'✨ Premium schaltet den sozialen Feed, Reaktionen, Profil-Banner und Ziel-Erinnerungen frei.','Your network, feed, achievement cards and goal memories.':'Dein Netzwerk, Feed, Erfolgskarten und Ziel-Erinnerungen.','reached 🎉':'erreicht 🎉','Share':'Teilen',
   'Student Verification':'Studenten-Verifizierung','Verify your student status to unlock':'Verifiziere deinen Studentenstatus, um freizuschalten','Pro free for 2 years':'Pro 2 Jahre gratis','All fields are required.':'Alle Felder sind erforderlich.','University / Institution *':'Universität / Institution *','Student email *':'Studenten-E-Mail *','Proof document * (student ID or enrolment letter)':'Nachweisdokument * (Studentenausweis oder Immatrikulation)','Submit for verification':'Zur Verifizierung einreichen','An admin reviews every request. On approval your plan upgrades to Pro for 2 years automatically.':'Ein Admin prüft jede Anfrage. Nach Genehmigung wird dein Tarif automatisch 2 Jahre auf Pro hochgestuft.','Student verification is not available in demo mode.':'Studenten-Verifizierung ist im Demo-Modus nicht verfügbar.',
   'Groceries':'Lebensmittel','Gas/Fuel':'Kraftstoff','Shopping':'Einkaufen','Restaurants':'Restaurants','Fast Food':'Fastfood','Cigarettes':'Zigaretten','Entertainment':'Unterhaltung','Subscriptions':'Abos','Transportation':'Transport','Rent':'Miete','Utilities':'Nebenkosten','Education':'Bildung','Other':'Sonstiges','Savings':'Ersparnisse',
@@ -180,11 +235,11 @@ const I18N={
   'Features':'Funciones','Pricing':'Precios','FAQ':'Preguntas','Get started →':'Empezar →','Turn Every Euro':'Convierte cada euro','Into Progress.':'En progreso.','AI-powered financial coaching':'Coaching financiero con IA','Start for free →':'Empieza gratis →','No credit card required · Students get Pro free':'Sin tarjeta · Estudiantes obtienen Pro gratis','Everything you need to':'Todo lo que necesitas para','win with money':'ganar con el dinero','Simple, honest pricing':'Precios simples y honestos','Get started':'Empezar','Most popular':'Más popular','Questions, answered':'Preguntas, respondidas','Is Goalify really free?':'¿Goalify es realmente gratis?','How do students get Pro free?':'¿Cómo obtienen Pro gratis los estudiantes?','Is my data secure?':'¿Mis datos están seguros?','How does the AI work?':'¿Cómo funciona la IA?','Turn every euro into progress':'Convierte cada euro en progreso','All rights reserved.':'Todos los derechos reservados.',
   'Are you currently a student?':'¿Eres estudiante actualmente?','What is your employment status?':'¿Cuál es tu situación laboral?','What is your monthly income?':'¿Cuál es tu ingreso mensual?','How much do you save per month?':'¿Cuánto ahorras al mes?','What are your financial goals?':'¿Cuáles son tus metas financieras?','Which describe your money habits?':'¿Cuáles describen tus hábitos con el dinero?','Select all that apply.':'Selecciona todo lo que aplique.','Your monthly spending':'Tus gastos mensuales','Enter what you spend per category (leave 0 if none).':'Ingresa lo que gastas por categoría (deja 0 si ninguno).','Analyzing your finances…':'Analizando tus finanzas…','Your money personality':'Tu personalidad con el dinero','Income':'Ingresos','Recommendations':'Recomendaciones','Go to dashboard →':'Ir al panel →','Continue →':'Continuar →','← Back':'← Atrás','No, not a student':'No, no soy estudiante','Yes, full-time':'Sí, tiempo completo','Yes, part-time':'Sí, tiempo parcial','Employed full-time':'Empleado tiempo completo','Employed part-time':'Empleado tiempo parcial','Self-employed':'Autónomo','Not working':'Sin trabajo','Student':'Estudiante','Emergency fund':'Fondo de emergencia','Big purchase':'Compra grande','Invest & grow':'Invertir y crecer','Pay off debt':'Pagar deudas','Travel':'Viajar','Stop overspending':'Dejar de gastar de más','I plan purchases':'Planifico las compras','I buy on impulse':'Compro por impulso','I spend on experiences':'Gasto en experiencias','I track everything':'Lo registro todo','I have many subscriptions':'Tengo muchas suscripciones','I prefer saving':'Prefiero ahorrar',
   'Top goal':'Meta principal','Still needed':'Aún falta','Time left':'Tiempo restante','Per day':'Por día','set a plan':'establecer un plan','check-ins':'registros','best streak':'mejor racha','active goals':'metas activas','Streak health':'Salud de la racha','Share weekly progress':'Compartir progreso semanal','Today\'s missions':'Misiones de hoy','done today':'hechas hoy','Manage missions →':'Gestionar misiones →','What to reduce':'Qué reducir','per month':'por mes','Total potential':'Potencial total','Add some expenses and Goalify will show exactly where to cut.':'Agrega gastos y Goalify mostrará exactamente dónde recortar.','No active goal yet':'Aún sin meta activa','Set a goal and Goalify shows exactly what to cut to reach it faster.':'Establece una meta y Goalify mostrará qué recortar para lograrla más rápido.','+ Create a goal':'+ Crear una meta','🎉 All caught up for today — nice work!':'🎉 ¡Todo listo por hoy — buen trabajo!','AI Insights':'Información IA','Generating…':'Generando…','Open AI Coach →':'Abrir Entrenador IA →','Open Simulator →':'Abrir Simulador →','See plans →':'Ver planes →','On track':'En camino','Over budget':'Sobre presupuesto','all-time':'histórico','Goalify Score':'Puntuación Goalify','Money Health':'Salud financiera','This week':'Esta semana','Strong':'Fuerte','Stable':'Estable','Weak':'Débil','Critical':'Crítico','Unlock Pro':'Desbloquear Pro','Verify student status for free Pro.':'Verifica tu estado de estudiante para Pro gratis.','Verify now':'Verificar ahora','Explore Pro →':'Explorar Pro →','Free perk: Achievements':'Beneficio gratis: Logros','AI behaviour coach':'Coach de conducta IA','plan':'plan','+ New goal':'+ Nueva meta',
-  'Long-term goals, broken into weekly missions you check in on.':'Metas a largo plazo, divididas en misiones semanales que registras.','Unlimited goals.':'Metas ilimitadas.','Free — archived goals still count':'Gratis — las metas archivadas aún cuentan','No missions yet — add the weekly actions that drive this goal.':'Aún sin misiones — agrega las acciones semanales que impulsan esta meta.','Archived':'Archivadas','Active · Private':'Activa · Privada','✓ Completed':'✓ Completada','📦 Archived':'📦 Archivada','Daily':'Diaria','Weekly':'Semanal','this week':'esta semana','Easy':'Fácil','Medium':'Media','Hard':'Difícil','+ Add mission':'+ Agregar misión','Missions':'Misiones','No goals yet':'Aún sin metas','Create your first goal, then add missions that drive it.':'Crea tu primera meta y luego agrega misiones que la impulsen.','Make private':'Hacer privada','Make public':'Hacer pública','Add €':'Agregar €','Archive':'Archivar','Restore':'Restaurar','No active goals.':'Sin metas activas.',
+  'Long-term goals, broken into weekly missions you check in on.':'Metas a largo plazo, divididas en misiones semanales que registras.','Unlimited goals.':'Metas ilimitadas.','Free — archived goals still count':'Gratis — las metas archivadas aún cuentan','No missions yet. Add the weekly actions that drive this goal.':'Aún sin misiones — agrega las acciones semanales que impulsan esta meta.','Archived':'Archivadas','Active · Private':'Activa · Privada','✓ Completed':'✓ Completada','📦 Archived':'📦 Archivada','Daily':'Diaria','Weekly':'Semanal','this week':'esta semana','Easy':'Fácil','Medium':'Media','Hard':'Difícil','+ Add mission':'+ Agregar misión','Missions':'Misiones','No goals yet':'Aún sin metas','Create your first goal, then add missions that drive it.':'Crea tu primera meta y luego agrega misiones que la impulsen.','Make private':'Hacer privada','Make public':'Hacer pública','Add €':'Agregar €','Archive':'Archivar','Restore':'Restaurar','No active goals.':'Sin metas activas.',
   'Track expenses and explore spending across every timeframe.':'Registra gastos y explóralos en cualquier período.','Add expense':'Agregar gasto','Amount (€)':'Importe (€)','Category':'Categoría','Merchant':'Comercio','Date':'Fecha','optional':'opcional','Recent transactions':'Transacciones recientes','No transactions yet.':'Aún sin transacciones.','+ Add expense':'+ Agregar gasto','1 Month':'1 Mes','1 Year':'1 Año','5 Years':'5 Años','No spending this month yet.':'Aún sin gastos este mes.',
   'Model your savings, goal dates and growth.':'Modela tus ahorros, fechas de metas y crecimiento.','Your inputs':'Tus datos','Monthly expenses':'Gastos mensuales','Savings goal':'Meta de ahorro','Annual growth':'Crecimiento anual','Monthly savings':'Ahorro mensual','Goal reached in':'Meta alcanzada en','In 5 years':'En 5 años','5-year projection':'Proyección a 5 años','Milestones on the way':'Hitos en el camino','Try a scenario':'Prueba un escenario','Cut €100/mo more':'Recortar €100/mes más','Save aggressively':'Ahorrar agresivamente','Invest at 7%':'Invertir al 7%','Reset':'Restablecer','your goal':'tu meta','out of range':'fuera de rango','Increase your monthly saving to unlock milestones.':'Aumenta tu ahorro mensual para desbloquear hitos.','Now':'Ahora','in':'en',
   'Real AI financial coaching.':'Coaching financiero real con IA.','Today:':'Hoy:','messages':'mensajes','Unlimited':'Ilimitado','Coach personality':'Personalidad del coach','Ask your AI coach…':'Pregunta a tu coach IA…','How am I doing this week?':'¿Cómo voy esta semana?','How can I save more?':'¿Cómo puedo ahorrar más?','Where am I overspending?':'¿Dónde gasto de más?','Roast my spending':'Critica mis gastos','Chill Coach':'Coach relajado','Fun Coach':'Coach divertido','Strict Coach':'Coach estricto','Roast Mode':'Modo crítico','Soft, supportive tone':'Tono suave y de apoyo','Upbeat & motivational':'Animado y motivador','Direct, no fluff':'Directo, sin rodeos','Light humor, keeps it real':'Humor ligero, sin filtros',
-  'Real challenges with proof — XP is granted only after your evidence is reviewed. No instant completion.':'Retos reales con prueba — el XP se otorga solo tras revisar tu evidencia. Sin finalización instantánea.','Check-in streak':'Racha de registros','Check in (+10 XP)':'Registrar (+10 XP)','✓ Checked in today':'✓ Registrado hoy','Your active challenges':'Tus retos activos','Challenge catalog':'Catálogo de retos','All':'Todos','1 day':'1 día','7 days':'7 días','14 days':'14 días','In progress':'En curso','Start challenge':'Iniciar reto','Awaiting admin review':'Esperando revisión','Proof submitted — XP is granted only after approval.':'Prueba enviada — el XP se otorga solo tras la aprobación.','+ Log today\'s proof':'+ Registrar prueba de hoy','Submit for review':'Enviar a revisión','Leave':'Salir','earned':'ganado','Badges':'Insignias','Day':'Día','of':'de','proof':'prueba','proofs':'pruebas','logged':'registrado','XP total':'XP total',
+  'Real challenges with proof. XP is granted only after your evidence is reviewed. No instant completion.':'Retos reales con prueba — el XP se otorga solo tras revisar tu evidencia. Sin finalización instantánea.','Check-in streak':'Racha de registros','Check in (+10 XP)':'Registrar (+10 XP)','✓ Checked in today':'✓ Registrado hoy','Your active challenges':'Tus retos activos','Challenge catalog':'Catálogo de retos','All':'Todos','1 day':'1 día','7 days':'7 días','14 days':'14 días','In progress':'En curso','Start challenge':'Iniciar reto','Awaiting admin review':'Esperando revisión','Proof submitted — XP is granted only after approval.':'Prueba enviada — el XP se otorga solo tras la aprobación.','+ Log today\'s proof':'+ Registrar prueba de hoy','Submit for review':'Enviar a revisión','Leave':'Salir','earned':'ganado','Badges':'Insignias','Day':'Día','of':'de','proof':'prueba','proofs':'pruebas','logged':'registrado','XP total':'XP total',
   'Follow people and share your wins. Upgrade to Premium for the full feed, reactions and goal memories.':'Sigue a personas y comparte tus logros. Mejora a Premium para el feed completo, reacciones y recuerdos de metas.','Search by username…':'Buscar por nombre de usuario…','No profiles to show yet. Real people appear here once accounts go live — no placeholder users.':'Aún sin perfiles. Personas reales aparecen aquí cuando las cuentas se activan — sin usuarios ficticios.','Your achievement cards':'Tus tarjetas de logros','Achievement cards':'Tarjetas de logros','Complete a goal to unlock a shareable achievement card.':'Completa una meta para desbloquear una tarjeta de logro para compartir.','Goal memories':'Recuerdos de metas','progress history':'historial de progreso','Your feed is empty. When people you follow share goals, their updates show here — with reactions. No fake posts.':'Tu feed está vacío. Cuando las personas que sigues compartan metas, sus actualizaciones aparecerán aquí — con reacciones. Sin publicaciones falsas.','Your progress history builds here as you work toward goals.':'Tu historial de progreso se construye aquí mientras avanzas hacia tus metas.','✨ Premium unlocks the social feed, reactions, profile banners and goal memories.':'✨ Premium desbloquea el feed social, reacciones, banners de perfil y recuerdos de metas.','Your network, feed, achievement cards and goal memories.':'Tu red, feed, tarjetas de logros y recuerdos de metas.','reached 🎉':'alcanzada 🎉','Share':'Compartir',
   'Student Verification':'Verificación de estudiante','Verify your student status to unlock':'Verifica tu estado de estudiante para desbloquear','Pro free for 2 years':'Pro gratis por 2 años','All fields are required.':'Todos los campos son obligatorios.','University / Institution *':'Universidad / Institución *','Student email *':'Correo de estudiante *','Proof document * (student ID or enrolment letter)':'Documento de prueba * (carné o carta de matrícula)','Submit for verification':'Enviar para verificación','An admin reviews every request. On approval your plan upgrades to Pro for 2 years automatically.':'Un administrador revisa cada solicitud. Tras la aprobación, tu plan sube a Pro por 2 años automáticamente.','Student verification is not available in demo mode.':'La verificación de estudiante no está disponible en modo demo.',
   'Groceries':'Comestibles','Gas/Fuel':'Combustible','Shopping':'Compras','Restaurants':'Restaurantes','Fast Food':'Comida rápida','Cigarettes':'Cigarrillos','Entertainment':'Entretenimiento','Subscriptions':'Suscripciones','Transportation':'Transporte','Rent':'Alquiler','Utilities':'Servicios','Education':'Educación','Other':'Otro','Savings':'Ahorros',
@@ -203,11 +258,11 @@ const I18N={
   'Features':'Funzioni','Pricing':'Prezzi','FAQ':'FAQ','Get started →':'Inizia →','Turn Every Euro':'Trasforma ogni euro','Into Progress.':'In progresso.','AI-powered financial coaching':'Coaching finanziario con IA','Start for free →':'Inizia gratis →','No credit card required · Students get Pro free':'Nessuna carta · Gli studenti ottengono Pro gratis','Everything you need to':'Tutto ciò che ti serve per','win with money':'vincere con il denaro','Simple, honest pricing':'Prezzi semplici e onesti','Get started':'Inizia','Most popular':'Più popolare','Questions, answered':'Domande, risposte','Is Goalify really free?':'Goalify è davvero gratis?','How do students get Pro free?':'Come ottengono Pro gratis gli studenti?','Is my data secure?':'I miei dati sono sicuri?','How does the AI work?':'Come funziona l\'IA?','Turn every euro into progress':'Trasforma ogni euro in progresso','All rights reserved.':'Tutti i diritti riservati.',
   'Are you currently a student?':'Sei attualmente uno studente?','What is your employment status?':'Qual è il tuo stato lavorativo?','What is your monthly income?':'Qual è il tuo reddito mensile?','How much do you save per month?':'Quanto risparmi al mese?','What are your financial goals?':'Quali sono i tuoi obiettivi finanziari?','Which describe your money habits?':'Quali descrivono le tue abitudini con i soldi?','Select all that apply.':'Seleziona tutto ciò che si applica.','Your monthly spending':'Le tue spese mensili','Enter what you spend per category (leave 0 if none).':'Inserisci quanto spendi per categoria (lascia 0 se nulla).','Analyzing your finances…':'Analisi delle tue finanze…','Your money personality':'La tua personalità finanziaria','Income':'Reddito','Recommendations':'Raccomandazioni','Go to dashboard →':'Vai al pannello →','Continue →':'Continua →','← Back':'← Indietro','No, not a student':'No, non studente','Yes, full-time':'Sì, tempo pieno','Yes, part-time':'Sì, part-time','Employed full-time':'Impiegato tempo pieno','Employed part-time':'Impiegato part-time','Self-employed':'Autonomo','Not working':'Non lavoro','Student':'Studente','Emergency fund':'Fondo emergenza','Big purchase':'Grande acquisto','Invest & grow':'Investi e cresci','Pay off debt':'Ripaga il debito','Travel':'Viaggi','Stop overspending':'Smetti di spendere troppo','I plan purchases':'Pianifico gli acquisti','I buy on impulse':'Compro d\'impulso','I spend on experiences':'Spendo per esperienze','I track everything':'Traccio tutto','I have many subscriptions':'Ho molti abbonamenti','I prefer saving':'Preferisco risparmiare',
   'Top goal':'Obiettivo principale','Still needed':'Ancora necessario','Time left':'Tempo rimasto','Per day':'Al giorno','set a plan':'imposta un piano','check-ins':'check-in','best streak':'serie migliore','active goals':'obiettivi attivi','Streak health':'Salute della serie','Share weekly progress':'Condividi i progressi settimanali','Today\'s missions':'Missioni di oggi','done today':'fatte oggi','Manage missions →':'Gestisci missioni →','What to reduce':'Cosa ridurre','per month':'al mese','Total potential':'Potenziale totale','Add some expenses and Goalify will show exactly where to cut.':'Aggiungi spese e Goalify mostrerà esattamente dove tagliare.','No active goal yet':'Nessun obiettivo attivo','Set a goal and Goalify shows exactly what to cut to reach it faster.':'Imposta un obiettivo e Goalify mostra cosa tagliare per raggiungerlo prima.','+ Create a goal':'+ Crea un obiettivo','🎉 All caught up for today — nice work!':'🎉 Tutto fatto per oggi — ottimo lavoro!','AI Insights':'Approfondimenti IA','Generating…':'Generazione…','Open AI Coach →':'Apri Coach IA →','Open Simulator →':'Apri Simulatore →','See plans →':'Vedi piani →','On track':'In linea','Over budget':'Oltre budget','all-time':'di sempre','Goalify Score':'Punteggio Goalify','Money Health':'Salute finanziaria','This week':'Questa settimana','Strong':'Forte','Stable':'Stabile','Weak':'Debole','Critical':'Critico','Unlock Pro':'Sblocca Pro','Verify student status for free Pro.':'Verifica lo stato di studente per Pro gratis.','Verify now':'Verifica ora','Explore Pro →':'Esplora Pro →','Free perk: Achievements':'Vantaggio gratis: Traguardi','AI behaviour coach':'Coach comportamentale IA','plan':'piano','+ New goal':'+ Nuovo obiettivo',
-  'Long-term goals, broken into weekly missions you check in on.':'Obiettivi a lungo termine, divisi in missioni settimanali con check-in.','Unlimited goals.':'Obiettivi illimitati.','Free — archived goals still count':'Gratis — gli obiettivi archiviati contano ancora','No missions yet — add the weekly actions that drive this goal.':'Nessuna missione ancora — aggiungi le azioni settimanali per questo obiettivo.','Archived':'Archiviati','Active · Private':'Attivo · Privato','✓ Completed':'✓ Completato','📦 Archived':'📦 Archiviato','Daily':'Giornaliera','Weekly':'Settimanale','this week':'questa settimana','Easy':'Facile','Medium':'Media','Hard':'Difficile','+ Add mission':'+ Aggiungi missione','Missions':'Missioni','No goals yet':'Nessun obiettivo ancora','Create your first goal, then add missions that drive it.':'Crea il tuo primo obiettivo, poi aggiungi le missioni che lo guidano.','Make private':'Rendi privato','Make public':'Rendi pubblico','Add €':'Aggiungi €','Archive':'Archivia','Restore':'Ripristina','No active goals.':'Nessun obiettivo attivo.',
+  'Long-term goals, broken into weekly missions you check in on.':'Obiettivi a lungo termine, divisi in missioni settimanali con check-in.','Unlimited goals.':'Obiettivi illimitati.','Free — archived goals still count':'Gratis — gli obiettivi archiviati contano ancora','No missions yet. Add the weekly actions that drive this goal.':'Nessuna missione ancora — aggiungi le azioni settimanali per questo obiettivo.','Archived':'Archiviati','Active · Private':'Attivo · Privato','✓ Completed':'✓ Completato','📦 Archived':'📦 Archiviato','Daily':'Giornaliera','Weekly':'Settimanale','this week':'questa settimana','Easy':'Facile','Medium':'Media','Hard':'Difficile','+ Add mission':'+ Aggiungi missione','Missions':'Missioni','No goals yet':'Nessun obiettivo ancora','Create your first goal, then add missions that drive it.':'Crea il tuo primo obiettivo, poi aggiungi le missioni che lo guidano.','Make private':'Rendi privato','Make public':'Rendi pubblico','Add €':'Aggiungi €','Archive':'Archivia','Restore':'Ripristina','No active goals.':'Nessun obiettivo attivo.',
   'Track expenses and explore spending across every timeframe.':'Traccia le spese ed esplorale in ogni periodo.','Add expense':'Aggiungi spesa','Amount (€)':'Importo (€)','Category':'Categoria','Merchant':'Negozio','Date':'Data','optional':'opzionale','Recent transactions':'Transazioni recenti','No transactions yet.':'Nessuna transazione ancora.','+ Add expense':'+ Aggiungi spesa','1 Month':'1 Mese','1 Year':'1 Anno','5 Years':'5 Anni','No spending this month yet.':'Nessuna spesa questo mese.',
   'Model your savings, goal dates and growth.':'Modella risparmi, date obiettivo e crescita.','Your inputs':'I tuoi dati','Monthly expenses':'Spese mensili','Savings goal':'Obiettivo di risparmio','Annual growth':'Crescita annuale','Monthly savings':'Risparmio mensile','Goal reached in':'Obiettivo raggiunto in','In 5 years':'In 5 anni','5-year projection':'Proiezione a 5 anni','Milestones on the way':'Tappe lungo il percorso','Try a scenario':'Prova uno scenario','Cut €100/mo more':'Taglia €100/mese in più','Save aggressively':'Risparmia aggressivamente','Invest at 7%':'Investi al 7%','Reset':'Reimposta','your goal':'il tuo obiettivo','out of range':'fuori intervallo','Increase your monthly saving to unlock milestones.':'Aumenta il risparmio mensile per sbloccare le tappe.','Now':'Ora','in':'in',
   'Real AI financial coaching.':'Vero coaching finanziario con IA.','Today:':'Oggi:','messages':'messaggi','Unlimited':'Illimitati','Coach personality':'Personalità del coach','Ask your AI coach…':'Chiedi al tuo coach IA…','How am I doing this week?':'Come sto andando questa settimana?','How can I save more?':'Come posso risparmiare di più?','Where am I overspending?':'Dove spendo troppo?','Roast my spending':'Critica le mie spese','Chill Coach':'Coach rilassato','Fun Coach':'Coach divertente','Strict Coach':'Coach severo','Roast Mode':'Modalità critica','Soft, supportive tone':'Tono morbido e di supporto','Upbeat & motivational':'Energico e motivazionale','Direct, no fluff':'Diretto, senza giri','Light humor, keeps it real':'Umorismo leggero, resta sincero',
-  'Real challenges with proof — XP is granted only after your evidence is reviewed. No instant completion.':'Sfide reali con prova — gli XP vengono concessi solo dopo la revisione della tua prova. Nessun completamento immediato.','Check-in streak':'Serie di check-in','Check in (+10 XP)':'Check-in (+10 XP)','✓ Checked in today':'✓ Check-in fatto oggi','Your active challenges':'Le tue sfide attive','Challenge catalog':'Catalogo sfide','All':'Tutte','1 day':'1 giorno','7 days':'7 giorni','14 days':'14 giorni','In progress':'In corso','Start challenge':'Inizia sfida','Awaiting admin review':'In attesa di revisione','Proof submitted — XP is granted only after approval.':'Prova inviata — gli XP vengono concessi solo dopo l\'approvazione.','+ Log today\'s proof':'+ Registra la prova di oggi','Submit for review':'Invia per revisione','Leave':'Abbandona','earned':'guadagnati','Badges':'Distintivi','Day':'Giorno','of':'di','proof':'prova','proofs':'prove','logged':'registrate','XP total':'XP totali',
+  'Real challenges with proof. XP is granted only after your evidence is reviewed. No instant completion.':'Sfide reali con prova — gli XP vengono concessi solo dopo la revisione della tua prova. Nessun completamento immediato.','Check-in streak':'Serie di check-in','Check in (+10 XP)':'Check-in (+10 XP)','✓ Checked in today':'✓ Check-in fatto oggi','Your active challenges':'Le tue sfide attive','Challenge catalog':'Catalogo sfide','All':'Tutte','1 day':'1 giorno','7 days':'7 giorni','14 days':'14 giorni','In progress':'In corso','Start challenge':'Inizia sfida','Awaiting admin review':'In attesa di revisione','Proof submitted — XP is granted only after approval.':'Prova inviata — gli XP vengono concessi solo dopo l\'approvazione.','+ Log today\'s proof':'+ Registra la prova di oggi','Submit for review':'Invia per revisione','Leave':'Abbandona','earned':'guadagnati','Badges':'Distintivi','Day':'Giorno','of':'di','proof':'prova','proofs':'prove','logged':'registrate','XP total':'XP totali',
   'Follow people and share your wins. Upgrade to Premium for the full feed, reactions and goal memories.':'Segui le persone e condividi i tuoi successi. Passa a Premium per il feed completo, le reazioni e i ricordi degli obiettivi.','Search by username…':'Cerca per nome utente…','No profiles to show yet. Real people appear here once accounts go live — no placeholder users.':'Nessun profilo da mostrare. Persone reali appaiono qui quando gli account sono attivi — nessun utente fittizio.','Your achievement cards':'Le tue carte traguardo','Achievement cards':'Carte traguardo','Complete a goal to unlock a shareable achievement card.':'Completa un obiettivo per sbloccare una carta traguardo condivisibile.','Goal memories':'Ricordi degli obiettivi','progress history':'cronologia progressi','Your feed is empty. When people you follow share goals, their updates show here — with reactions. No fake posts.':'Il tuo feed è vuoto. Quando le persone che segui condividono obiettivi, i loro aggiornamenti appaiono qui — con reazioni. Nessun post falso.','Your progress history builds here as you work toward goals.':'La tua cronologia dei progressi si costruisce qui mentre lavori verso gli obiettivi.','✨ Premium unlocks the social feed, reactions, profile banners and goal memories.':'✨ Premium sblocca il feed social, le reazioni, i banner del profilo e i ricordi degli obiettivi.','Your network, feed, achievement cards and goal memories.':'La tua rete, il feed, le carte traguardo e i ricordi degli obiettivi.','reached 🎉':'raggiunto 🎉','Share':'Condividi',
   'Student Verification':'Verifica studente','Verify your student status to unlock':'Verifica il tuo stato di studente per sbloccare','Pro free for 2 years':'Pro gratis per 2 anni','All fields are required.':'Tutti i campi sono obbligatori.','University / Institution *':'Università / Istituto *','Student email *':'Email studente *','Proof document * (student ID or enrolment letter)':'Documento di prova * (tessera studente o lettera di iscrizione)','Submit for verification':'Invia per verifica','An admin reviews every request. On approval your plan upgrades to Pro for 2 years automatically.':'Un amministratore esamina ogni richiesta. Dopo l\'approvazione il tuo piano passa a Pro per 2 anni automaticamente.','Student verification is not available in demo mode.':'La verifica studente non è disponibile in modalità demo.',
   'Groceries':'Generi alimentari','Gas/Fuel':'Carburante','Shopping':'Acquisti','Restaurants':'Ristoranti','Fast Food':'Fast food','Cigarettes':'Sigarette','Entertainment':'Intrattenimento','Subscriptions':'Abbonamenti','Transportation':'Trasporti','Rent':'Affitto','Utilities':'Utenze','Education':'Istruzione','Other':'Altro','Savings':'Risparmi',
@@ -226,11 +281,11 @@ const I18N={
   'Features':'Fonctionnalités','Pricing':'Tarifs','FAQ':'FAQ','Get started →':'Commencer →','Turn Every Euro':'Transformez chaque euro','Into Progress.':'En progrès.','AI-powered financial coaching':'Coaching financier par IA','Start for free →':'Commencer gratuitement →','No credit card required · Students get Pro free':'Aucune carte requise · Pro gratuit pour les étudiants','Everything you need to':'Tout ce qu\'il vous faut pour','win with money':'réussir avec l\'argent','Simple, honest pricing':'Des tarifs simples et honnêtes','Get started':'Commencer','Most popular':'Le plus populaire','Questions, answered':'Questions, réponses','Is Goalify really free?':'Goalify est-il vraiment gratuit ?','How do students get Pro free?':'Comment les étudiants obtiennent-ils Pro gratuitement ?','Is my data secure?':'Mes données sont-elles sécurisées ?','How does the AI work?':'Comment fonctionne l\'IA ?','Turn every euro into progress':'Transformez chaque euro en progrès','All rights reserved.':'Tous droits réservés.',
   'Are you currently a student?':'Êtes-vous actuellement étudiant ?','What is your employment status?':'Quel est votre statut professionnel ?','What is your monthly income?':'Quel est votre revenu mensuel ?','How much do you save per month?':'Combien épargnez-vous par mois ?','What are your financial goals?':'Quels sont vos objectifs financiers ?','Which describe your money habits?':'Lesquels décrivent vos habitudes financières ?','Select all that apply.':'Sélectionnez tout ce qui s\'applique.','Your monthly spending':'Vos dépenses mensuelles','Enter what you spend per category (leave 0 if none).':'Saisissez vos dépenses par catégorie (laissez 0 si rien).','Analyzing your finances…':'Analyse de vos finances…','Your money personality':'Votre personnalité financière','Income':'Revenu','Recommendations':'Recommandations','Go to dashboard →':'Aller au tableau de bord →','Continue →':'Continuer →','← Back':'← Retour','No, not a student':'Non, pas étudiant','Yes, full-time':'Oui, à temps plein','Yes, part-time':'Oui, à temps partiel','Employed full-time':'Salarié à temps plein','Employed part-time':'Salarié à temps partiel','Self-employed':'Indépendant','Not working':'Sans emploi','Student':'Étudiant','Emergency fund':'Fonds d\'urgence','Big purchase':'Gros achat','Invest & grow':'Investir et croître','Pay off debt':'Rembourser ses dettes','Travel':'Voyage','Stop overspending':'Arrêter de trop dépenser','I plan purchases':'Je planifie mes achats','I buy on impulse':'J\'achète sur un coup de tête','I spend on experiences':'Je dépense pour des expériences','I track everything':'Je suis tout','I have many subscriptions':'J\'ai beaucoup d\'abonnements','I prefer saving':'Je préfère épargner',
   'Top goal':'Objectif principal','Still needed':'Encore nécessaire','Time left':'Temps restant','Per day':'Par jour','set a plan':'définir un plan','check-ins':'pointages','best streak':'meilleure série','active goals':'objectifs actifs','Streak health':'Santé de la série','Share weekly progress':'Partager les progrès hebdo','Today\'s missions':'Missions du jour','done today':'faites aujourd\'hui','Manage missions →':'Gérer les missions →','What to reduce':'Quoi réduire','per month':'par mois','Total potential':'Potentiel total','Add some expenses and Goalify will show exactly where to cut.':'Ajoutez des dépenses et Goalify montrera exactement où couper.','No active goal yet':'Aucun objectif actif','Set a goal and Goalify shows exactly what to cut to reach it faster.':'Définissez un objectif et Goalify montre quoi couper pour l\'atteindre plus vite.','+ Create a goal':'+ Créer un objectif','🎉 All caught up for today — nice work!':'🎉 Tout est fait pour aujourd\'hui — bravo !','AI Insights':'Analyses IA','Generating…':'Génération…','Open AI Coach →':'Ouvrir le Coach IA →','Open Simulator →':'Ouvrir le simulateur →','See plans →':'Voir les forfaits →','On track':'Sur la bonne voie','Over budget':'Hors budget','all-time':'depuis toujours','Goalify Score':'Score Goalify','Money Health':'Santé financière','This week':'Cette semaine','Strong':'Solide','Stable':'Stable','Weak':'Faible','Critical':'Critique','Unlock Pro':'Débloquer Pro','Verify student status for free Pro.':'Vérifiez votre statut étudiant pour Pro gratuit.','Verify now':'Vérifier maintenant','Explore Pro →':'Découvrir Pro →','Free perk: Achievements':'Avantage gratuit : Succès','AI behaviour coach':'Coach comportemental IA','plan':'forfait','+ New goal':'+ Nouvel objectif',
-  'Long-term goals, broken into weekly missions you check in on.':'Objectifs à long terme, divisés en missions hebdomadaires à pointer.','Unlimited goals.':'Objectifs illimités.','Free — archived goals still count':'Gratuit — les objectifs archivés comptent toujours','No missions yet — add the weekly actions that drive this goal.':'Aucune mission — ajoutez les actions hebdomadaires de cet objectif.','Archived':'Archivés','Active · Private':'Actif · Privé','✓ Completed':'✓ Terminé','📦 Archived':'📦 Archivé','Daily':'Quotidienne','Weekly':'Hebdomadaire','this week':'cette semaine','Easy':'Facile','Medium':'Moyen','Hard':'Difficile','+ Add mission':'+ Ajouter une mission','Missions':'Missions','No goals yet':'Aucun objectif','Create your first goal, then add missions that drive it.':'Créez votre premier objectif, puis ajoutez les missions associées.','Make private':'Rendre privé','Make public':'Rendre public','Add €':'Ajouter €','Archive':'Archiver','Restore':'Restaurer','No active goals.':'Aucun objectif actif.',
+  'Long-term goals, broken into weekly missions you check in on.':'Objectifs à long terme, divisés en missions hebdomadaires à pointer.','Unlimited goals.':'Objectifs illimités.','Free — archived goals still count':'Gratuit — les objectifs archivés comptent toujours','No missions yet. Add the weekly actions that drive this goal.':'Aucune mission — ajoutez les actions hebdomadaires de cet objectif.','Archived':'Archivés','Active · Private':'Actif · Privé','✓ Completed':'✓ Terminé','📦 Archived':'📦 Archivé','Daily':'Quotidienne','Weekly':'Hebdomadaire','this week':'cette semaine','Easy':'Facile','Medium':'Moyen','Hard':'Difficile','+ Add mission':'+ Ajouter une mission','Missions':'Missions','No goals yet':'Aucun objectif','Create your first goal, then add missions that drive it.':'Créez votre premier objectif, puis ajoutez les missions associées.','Make private':'Rendre privé','Make public':'Rendre public','Add €':'Ajouter €','Archive':'Archiver','Restore':'Restaurer','No active goals.':'Aucun objectif actif.',
   'Track expenses and explore spending across every timeframe.':'Suivez vos dépenses et explorez-les sur toutes les périodes.','Add expense':'Ajouter une dépense','Amount (€)':'Montant (€)','Category':'Catégorie','Merchant':'Commerçant','Date':'Date','optional':'facultatif','Recent transactions':'Transactions récentes','No transactions yet.':'Aucune transaction.','+ Add expense':'+ Ajouter une dépense','1 Month':'1 mois','1 Year':'1 an','5 Years':'5 ans','No spending this month yet.':'Aucune dépense ce mois-ci.',
   'Model your savings, goal dates and growth.':'Modélisez votre épargne, vos échéances et votre croissance.','Your inputs':'Vos données','Monthly expenses':'Dépenses mensuelles','Savings goal':'Objectif d\'épargne','Annual growth':'Croissance annuelle','Monthly savings':'Épargne mensuelle','Goal reached in':'Objectif atteint dans','In 5 years':'Dans 5 ans','5-year projection':'Projection sur 5 ans','Milestones on the way':'Étapes en chemin','Try a scenario':'Essayer un scénario','Cut €100/mo more':'Couper €100/mois de plus','Save aggressively':'Épargner agressivement','Invest at 7%':'Investir à 7 %','Reset':'Réinitialiser','your goal':'votre objectif','out of range':'hors plage','Increase your monthly saving to unlock milestones.':'Augmentez votre épargne mensuelle pour débloquer des étapes.','Now':'Maintenant','in':'dans',
   'Real AI financial coaching.':'Un vrai coaching financier par IA.','Today:':'Aujourd\'hui :','messages':'messages','Unlimited':'Illimité','Coach personality':'Personnalité du coach','Ask your AI coach…':'Demandez à votre coach IA…','How am I doing this week?':'Comment je m\'en sors cette semaine ?','How can I save more?':'Comment épargner plus ?','Where am I overspending?':'Où est-ce que je dépense trop ?','Roast my spending':'Critique mes dépenses','Chill Coach':'Coach cool','Fun Coach':'Coach fun','Strict Coach':'Coach strict','Roast Mode':'Mode critique','Soft, supportive tone':'Ton doux et bienveillant','Upbeat & motivational':'Dynamique et motivant','Direct, no fluff':'Direct, sans détour','Light humor, keeps it real':'Humour léger, reste honnête',
-  'Real challenges with proof — XP is granted only after your evidence is reviewed. No instant completion.':'De vrais défis avec preuve — les XP sont accordés seulement après vérification. Pas de validation instantanée.','Check-in streak':'Série de pointages','Check in (+10 XP)':'Pointer (+10 XP)','✓ Checked in today':'✓ Pointé aujourd\'hui','Your active challenges':'Vos défis actifs','Challenge catalog':'Catalogue de défis','All':'Tous','1 day':'1 jour','7 days':'7 jours','14 days':'14 jours','In progress':'En cours','Start challenge':'Démarrer le défi','Awaiting admin review':'En attente de révision','Proof submitted — XP is granted only after approval.':'Preuve envoyée — les XP sont accordés après approbation.','+ Log today\'s proof':'+ Enregistrer la preuve du jour','Submit for review':'Soumettre pour révision','Leave':'Quitter','earned':'gagnés','Badges':'Badges','Day':'Jour','of':'sur','proof':'preuve','proofs':'preuves','logged':'enregistrées','XP total':'XP au total',
+  'Real challenges with proof. XP is granted only after your evidence is reviewed. No instant completion.':'De vrais défis avec preuve — les XP sont accordés seulement après vérification. Pas de validation instantanée.','Check-in streak':'Série de pointages','Check in (+10 XP)':'Pointer (+10 XP)','✓ Checked in today':'✓ Pointé aujourd\'hui','Your active challenges':'Vos défis actifs','Challenge catalog':'Catalogue de défis','All':'Tous','1 day':'1 jour','7 days':'7 jours','14 days':'14 jours','In progress':'En cours','Start challenge':'Démarrer le défi','Awaiting admin review':'En attente de révision','Proof submitted — XP is granted only after approval.':'Preuve envoyée — les XP sont accordés après approbation.','+ Log today\'s proof':'+ Enregistrer la preuve du jour','Submit for review':'Soumettre pour révision','Leave':'Quitter','earned':'gagnés','Badges':'Badges','Day':'Jour','of':'sur','proof':'preuve','proofs':'preuves','logged':'enregistrées','XP total':'XP au total',
   'Follow people and share your wins. Upgrade to Premium for the full feed, reactions and goal memories.':'Suivez des gens et partagez vos réussites. Passez à Premium pour le fil complet, les réactions et les souvenirs d\'objectifs.','Search by username…':'Rechercher par nom d\'utilisateur…','No profiles to show yet. Real people appear here once accounts go live — no placeholder users.':'Aucun profil à afficher. De vraies personnes apparaîtront ici une fois les comptes actifs — aucun utilisateur fictif.','Your achievement cards':'Vos cartes de réussite','Achievement cards':'Cartes de réussite','Complete a goal to unlock a shareable achievement card.':'Atteignez un objectif pour débloquer une carte de réussite partageable.','Goal memories':'Souvenirs d\'objectifs','progress history':'historique des progrès','Your feed is empty. When people you follow share goals, their updates show here — with reactions. No fake posts.':'Votre fil est vide. Quand les personnes que vous suivez partagent des objectifs, leurs mises à jour apparaissent ici — avec réactions. Aucun faux post.','Your progress history builds here as you work toward goals.':'Votre historique de progression se construit ici au fil de vos objectifs.','✨ Premium unlocks the social feed, reactions, profile banners and goal memories.':'✨ Premium débloque le fil social, les réactions, les bannières de profil et les souvenirs d\'objectifs.','Your network, feed, achievement cards and goal memories.':'Votre réseau, votre fil, vos cartes de réussite et vos souvenirs d\'objectifs.','reached 🎉':'atteint 🎉','Share':'Partager',
   'Student Verification':'Vérification étudiante','Verify your student status to unlock':'Vérifiez votre statut étudiant pour débloquer','Pro free for 2 years':'Pro gratuit pendant 2 ans','All fields are required.':'Tous les champs sont obligatoires.','University / Institution *':'Université / Établissement *','Student email *':'E-mail étudiant *','Proof document * (student ID or enrolment letter)':'Document justificatif * (carte étudiant ou certificat de scolarité)','Submit for verification':'Soumettre pour vérification','An admin reviews every request. On approval your plan upgrades to Pro for 2 years automatically.':'Un administrateur examine chaque demande. Après approbation, votre forfait passe à Pro pendant 2 ans automatiquement.','Student verification is not available in demo mode.':'La vérification étudiante n\'est pas disponible en mode démo.',
   'Groceries':'Courses','Gas/Fuel':'Carburant','Shopping':'Achats','Restaurants':'Restaurants','Fast Food':'Fast-food','Cigarettes':'Cigarettes','Entertainment':'Divertissement','Subscriptions':'Abonnements','Transportation':'Transport','Rent':'Loyer','Utilities':'Charges','Education':'Éducation','Other':'Autre','Savings':'Épargne',
@@ -490,7 +545,7 @@ function setLang(l){
 function planNav(plan){
   const c=caps(plan);
   const nav=[['dashboard','Dashboard','home'],['goals','Goals','goal'],['groups','Group Goals','users'],['friends','Friends','users']];
-  nav.push(['analytics','Analytics','chart'],['simulator','Future Simulator','crystal'],['spendcalc','Impact Calculator','euro'],['challenges','Challenges','trophy']);
+  nav.push(['analytics','Analytics','chart'],['recurring','Recurring','repeat'],['simulator','Future Simulator','crystal'],['spendcalc','Impact Calculator','euro'],['challenges','Challenges','trophy']);
   if(c.social!=='none')nav.push(['social','Social','users']);
   nav.push(['inbox','Inbox','inbox']);
   nav.push(['profile','Profile','user']);
@@ -594,7 +649,11 @@ const $=(s,el=document)=>el.querySelector(s);
 const esc=(s)=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt=(n,cur=(ME?.currency||'EUR'))=>new Intl.NumberFormat('en-IE',{style:'currency',currency:cur,maximumFractionDigits:(Math.abs(n||0)%1===0?0:2)}).format(n||0);
 const pct=(a,b)=>b?Math.min(100,Math.round(a/b*100)):0;
-const todayISO=()=>new Date().toISOString().slice(0,10);
+// Local calendar day. toISOString() is UTC, which lands on the wrong date for
+// anyone not on UTC: a check-in at 00:30 in Pristina recorded as yesterday, and
+// the spending heatmap keyed a day off from the spent_at dates it compares to.
+const dayISO=(d=new Date())=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const todayISO=()=>dayISO();
 const ini=(p)=>((p?.first_name||p?.email||'U')[0]+(p?.last_name?.[0]||'')).toUpperCase();
 function toast(msg,type='ok'){ const el=document.getElementById('toast'); if(!el)return;
   // errors show quietly (neutral pill, no alarm-red) and never dump raw internals on the user
@@ -730,7 +789,7 @@ function whatToReduce(){
 // streaks (daily check-in) — stored locally
 function streakState(){try{return JSON.parse(localStorage.getItem('goalify_streak_'+uid()))||{count:0,last:null};}catch(e){return{count:0,last:null};}}
 function setStreakState(s){localStorage.setItem('goalify_streak_'+uid(),JSON.stringify(s));}
-function doCheckIn(){const s=streakState(),t=todayISO();if(s.last===t)return{...s,already:true};const y=new Date(Date.now()-864e5).toISOString().slice(0,10);s.count=(s.last===y?s.count+1:1);s.last=t;setStreakState(s);return{...s,already:false};}
+function doCheckIn(){const s=streakState(),t=todayISO();if(s.last===t)return{...s,already:true};const y=dayISO(new Date(Date.now()-864e5));s.count=(s.last===y?s.count+1:1);s.last=t;setStreakState(s);return{...s,already:false};}
 // challenges v2 — proof-based, XP only after admin approval (no instant complete / no farming)
 function chalState(){try{return JSON.parse(localStorage.getItem('goalify_chalv2_'+uid()))||[];}catch(e){return[];}}
 function setChalState(a){localStorage.setItem('goalify_chalv2_'+uid(),JSON.stringify(a));}
@@ -769,9 +828,9 @@ function mlogs(){try{return JSON.parse(localStorage.getItem('goalify_mlog_'+uid(
 function setMlogs(o){localStorage.setItem('goalify_mlog_'+uid(),JSON.stringify(o));}
 function missionLog(id){return mlogs()[id]||{};}
 function isDoneToday(id){return !!missionLog(id)[todayISO()];}
-function weekStartISO(d=new Date()){const x=new Date(d);x.setDate(x.getDate()-((x.getDay()+6)%7));return x.toISOString().slice(0,10);} // Monday
+function weekStartISO(d=new Date()){const x=new Date(d);x.setDate(x.getDate()-((x.getDay()+6)%7));return dayISO(x);} // Monday
 function doneThisWeek(id){const ws=weekStartISO(),log=missionLog(id);return Object.keys(log).filter(k=>k>=ws).length;}
-function missionStreak(id){const log=missionLog(id);let n=0,d=new Date();if(!log[todayISO()])d.setDate(d.getDate()-1);for(;;){const k=d.toISOString().slice(0,10);if(log[k]){n++;d.setDate(d.getDate()-1);}else break;}return n;}
+function missionStreak(id){const log=missionLog(id);let n=0,d=new Date();if(!log[todayISO()])d.setDate(d.getDate()-1);for(;;){const k=dayISO(d);if(log[k]){n++;d.setDate(d.getDate()-1);}else break;}return n;}
 function missionBest(id){const days=Object.keys(missionLog(id)).sort();let best=0,run=0,prev=null;days.forEach(k=>{run=prev&&(new Date(k)-new Date(prev))/864e5===1?run+1:1;best=Math.max(best,run);prev=k;});return best;}
 function streakHealth(n){if(n>=7)return{label:'Strong',c:'#22c55e',e:'🔥'};if(n>=3)return{label:'Stable',c:'#3b82f6',e:'💪'};if(n>=1)return{label:'Weak',c:'#f59e0b',e:'⚠️'};return{label:'Critical',c:'#ef4444',e:'❗'};}
 function allMissions(){return GOALS.flatMap(g=>(g.missions||[]).map(m=>({...m,goal:g})));}
@@ -791,7 +850,11 @@ function coinKey(){return 'goalify_coins_'+uid();}
 function coinLedger(){try{return JSON.parse(localStorage.getItem(coinKey()))||[];}catch(e){return [];}}
 function setCoinLedger(l){localStorage.setItem(coinKey(),JSON.stringify(l));}
 function coinBalance(){return coinLedger().reduce((s,r)=>s+(r.delta||0),0);}
-function coinEarnedToday(){const t=todayISO();return coinLedger().filter(r=>r.delta>0&&(r.at||'').slice(0,10)===t).reduce((s,r)=>s+r.delta,0);}
+// The coin caps mirror server-side enforcement, and credit_coins() compares
+// created_at::date against current_date in Postgres (UTC). So these two stay on
+// UTC on purpose, unlike streaks and heatmaps which follow the user's own day.
+const utcDayISO=(d=new Date())=>d.toISOString().slice(0,10);
+function coinEarnedToday(){const t=utcDayISO();return coinLedger().filter(r=>r.delta>0&&(r.at||'').slice(0,10)===t).reduce((s,r)=>s+r.delta,0);}
 function coinHas(reason,ref){return coinLedger().some(r=>r.reason===reason&&r.ref===ref);}
 // EARN — whitelisted amounts, once-per-ref idempotency, daily cap. Returns coins actually credited.
 function coinMultiplier(){return ME?.plan==='premium'||ME?.plan==='business'?2:ME?.plan==='pro'?1.5:1;}
@@ -933,7 +996,9 @@ function openFeatHelp(title,h){
 }
 // weekly earn cap by tier (Free intentionally throttled to drive upgrades)
 function coinWeeklyCap(){return ME?.plan==='premium'||ME?.plan==='business'?99999:ME?.plan==='pro'?99999:80;}
-function coinEarnedThisWeek(){const ws=weekStartISO();return coinLedger().filter(r=>r.delta>0&&(r.at||'').slice(0,10)>=ws).reduce((s,r)=>s+r.delta,0);}
+// UTC week start, to match date_trunc('week', now()) in credit_coins()
+function utcWeekStartISO(){const x=new Date();x.setUTCDate(x.getUTCDate()-((x.getUTCDay()+6)%7));return utcDayISO(x);} // Monday
+function coinEarnedThisWeek(){const ws=utcWeekStartISO();return coinLedger().filter(r=>r.delta>0&&(r.at||'').slice(0,10)>=ws).reduce((s,r)=>s+r.delta,0);}
 function coinPillHTML(compact){
   const bal=coinBalance(),col=coinGlyphColor();
   if(compact)return `<a href="#app/store" id="coinPillM" class="coin-pill" title="GoalCoins"><span class="coin-glyph" style="color:${col}">⊙</span><span class="coin-bal">${bal.toLocaleString('en-IE')}</span></a>`;
@@ -951,7 +1016,7 @@ function weekCheckins(){const ws=weekStartISO();return allMissions().reduce((s,m
 function behaviourReport(){
   const ms=allMissions().filter(m=>m.status==='active'&&m.cadence==='daily');
   const miss=[0,0,0,0,0,0,0],tot=[0,0,0,0,0,0,0],today=new Date();
-  ms.forEach(m=>{const log=missionLog(m.id);for(let i=1;i<=21;i++){const d=new Date(today);d.setDate(today.getDate()-i);const k=d.toISOString().slice(0,10),dow=d.getDay();tot[dow]++;if(!log[k])miss[dow]++;}});
+  ms.forEach(m=>{const log=missionLog(m.id);for(let i=1;i<=21;i++){const d=new Date(today);d.setDate(today.getDate()-i);const k=dayISO(d),dow=d.getDay();tot[dow]++;if(!log[k])miss[dow]++;}});
   let worst=null,wr=0;for(let i=0;i<7;i++)if(tot[i]>=2){const r=miss[i]/tot[i];if(r>wr){wr=r;worst=i;}}
   const DOW=['Sundays','Mondays','Tuesdays','Wednesdays','Thursdays','Fridays','Saturdays'];
   const suggestions=[];
@@ -986,7 +1051,7 @@ function weeklyReportText(){
 }
 function seedDemoMissions(){
   if(localStorage.getItem('goalify_mlog_demo'))return;
-  const o={},today=new Date(),add=(id,d)=>{o[id]=o[id]||{};o[id][d.toISOString().slice(0,10)]=true;};
+  const o={},today=new Date(),add=(id,d)=>{o[id]=o[id]||{};o[id][dayISO(d)]=true;};
   // m3: solid 8-day streak (Strong). m2: weekday-only (misses weekends -> AI detects). m1/m4 weekly.
   for(let i=0;i<=8;i++){const d=new Date(today);d.setDate(today.getDate()-i);add('m3',d);}
   for(let i=0;i<=20;i++){const d=new Date(today);d.setDate(today.getDate()-i);const dow=d.getDay();if(dow!==0&&dow!==6)add('m2',d);}
@@ -1051,6 +1116,8 @@ const GOOGLE_SVG='<svg width="18" height="18" viewBox="0 0 48 48"><path fill="#F
 const ICON_PATHS={
   goal:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
   chart:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  repeat:'<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+  download:'<path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/>',
   bolt:'<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" stroke-linejoin="round"/>',
   trophy:'<path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M7 6H4v2a3 3 0 0 0 3 3M17 6h3v2a3 3 0 0 1-3 3M9 20h6M10 20l.5-4M14 20l-.5-4"/>',
   lock:'<rect x="4.5" y="10" width="15" height="10" rx="2.2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
@@ -2239,7 +2306,7 @@ function appMenuSheet(){
     <div class="sheet" data-action="noop" role="dialog" aria-label="More">
       <div class="sheet-grip"></div>
       <div class="sheet-grid">
-        ${item('Goals','goals','goal')}${item('Groups','groups','users')}${item('Analytics','analytics','chart')}${item('Simulator','simulator','crystal')}
+        ${item('Goals','goals','goal')}${item('Groups','groups','users')}${item('Analytics','analytics','chart')}${item('Recurring','recurring','repeat')}${item('Simulator','simulator','crystal')}
         ${item('Impact','spendcalc','euro')}${item('Challenges','challenges','trophy')}${item('Social','social','users')}
         ${item('Rewards','rewards','gift')}
         <button class="sheet-item" data-action="searchSavers">${ICON('search')}<span>Find savers</span></button>
@@ -2513,7 +2580,7 @@ function savingsOpportunities(){
         // essentials (fuel, groceries, education) — suggest smarter spending ~15%
         saveMonthly=Math.round(monthly*0.15);
         current=freq>0?`${freq} ${recUnit(key,freq)}/week`:`${fmt(monthly)}/mo`;
-        suggestion='Spend smarter — save about 15%';
+        suggestion='Spend smarter: save about 15%';
       } else if(freq>0&&price>0){
         let reduceBy=Math.max(1,Math.round(freq*0.4));
         if(reduceBy>=freq)reduceBy=Math.max(1,freq-1);
@@ -2611,6 +2678,7 @@ function toolsRowHTML(){
   const c=caps(ME?.plan||'free');
   return quickRow('Tools',[
     ['Scan','','camera',false,'openScan'],
+    ['Recurring','recurring','repeat',false],
     ['Simulator','simulator','crystal',false],
     ['Impact','spendcalc','euro',false],
     ['Analytics','analytics','chart',false],
@@ -2626,6 +2694,29 @@ function communityRowHTML(){
         ['GoalVerse','goalverse','globe',!premium],
   ]);
 }
+// Compact dashboard strip for recurring commitments. Renders nothing until
+// there is an actual pattern to report, so new accounts stay uncluttered.
+function recurringCompactHTML(){
+  const items=detectRecurring();
+  const active=items.filter(i=>!i.dormant);
+  if(!active.length)return '';
+  const M='style="color:var(--muted)"';
+  const perMonth=active.reduce((s,i)=>s+i.monthly,0);
+  const top=active[0];
+  const risen=items.filter(i=>i.roseBy>0&&!i.dormant);
+  const dormant=items.filter(i=>i.dormant);
+  const flag=risen.length?`${esc(risen[0].merchant)} went up ${risen[0].roseBy}%`
+            :dormant.length?`${esc(dormant[0].merchant)} hasn't charged recently`:'';
+  return `<a href="#app/recurring" class="block glass rounded-2xl p-5 glass-hover">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="min-w-0">
+        <h3 class="font-semibold">Recurring charges</h3>
+        <p class="mt-1 text-sm" ${M}>${active.length} repeat payment${active.length===1?'':'s'} totalling <b style="color:var(--text)">${fmt(perMonth)}</b> a month, about <b style="color:var(--text)">${fmt(perMonth*12)}</b> a year. Biggest is ${esc(top.merchant)}.</p>
+        ${flag?`<p class="mt-1.5 text-xs" style="color:var(--coral)">${flag}</p>`:''}
+      </div>
+      <span class="btn btn-ghost !py-2 text-sm shrink-0">Review →</span>
+    </div></a>`;
+}
 function dashboardView(){
   const plan=ME.plan,s=snapshot(ME,EXPENSES),h=healthScore(s),c=caps(plan);
   const persona=ME.personality?PERSONAS[ME.personality]:null;
@@ -2633,14 +2724,14 @@ function dashboardView(){
   const header=`<div class="dash-head flex items-center justify-between gap-3"><div class="min-w-0"><h1 class="dash-h1 text-2xl font-bold sm:text-3xl truncate">Welcome back${ME.first_name?', <span class="gtext">'+esc(ME.first_name)+'</span>':''}</h1><p class="dash-sub mt-0.5 text-sm truncate" style="color:var(--muted)">${PLANS[plan].name}${persona?` · ${persona.name} ${persona.emoji}`:''}</p></div><a href="#app/goals" class="btn btn-primary dash-newgoal shrink-0">+ New goal</a></div>`;
   let analytics='';
   if(c.engage){
-    analytics=`<div class="glass rounded-2xl p-4 sm:p-6"><div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><h3 class="font-semibold">Spending trend</h3><div class="grid grid-cols-3 gap-1 rounded-xl p-1 text-xs sm:flex" style="background:var(--glass)">${[['month','1 Month'],['year','1 Year'],['five','5 Years']].map((t,i)=>`<button data-action="tf" data-tf="${t[0]}" class="rounded-lg px-2.5 py-1.5 text-center ${i===1?'text-white':''}" style="${i===1?'background:linear-gradient(90deg,var(--accent1),var(--accent2))':'color:var(--muted)'}">${t[1]}</button>`).join('')}</div></div><div style="height:200px;max-height:40vh"><canvas id="spendChart"></canvas></div></div>
+    analytics=`<div class="glass rounded-2xl p-4 sm:p-6"><div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><h3 class="font-semibold">Spending trend</h3><div class="grid grid-cols-3 gap-1 rounded-xl p-1 text-xs sm:flex" style="background:var(--glass)">${timeframeTabs([['month','1 Month'],['year','1 Year'],['five','5 Years']])}</div></div><div style="height:200px;max-height:40vh"><canvas id="spendChart"></canvas></div></div>
     <div class="grid gap-6 lg:grid-cols-2"><div class="glass rounded-2xl p-6"><h3 class="font-semibold mb-4">Category breakdown</h3><canvas id="catChart" height="180"></canvas></div>
-    <div class="glass rounded-2xl p-6"><div class="mb-1 flex items-center gap-2 font-semibold">🔮 Goal forecast</div><p class="text-sm" style="color:var(--muted)">At this pace you'll spend about <b class="text-white">${fmt(s.spending*12)}</b> and save <b class="text-white">${fmt(Math.max(0,s.leftover*12))}</b> this year.${s.savingsRate<20?` Lifting your savings rate to 20% adds <b class="text-white">${fmt(Math.max(0,(s.income*0.2-s.leftover)*12))}/yr</b>.`:' Strong savings rate — keep going!'}</p><a href="#app/simulator" class="mt-3 inline-block text-sm font-medium text-accent-purple hover:underline">Open Simulator →</a></div></div>`;
+    <div class="glass rounded-2xl p-6"><div class="mb-1 flex items-center gap-2 font-semibold">🔮 Goal forecast</div><p class="text-sm" style="color:var(--muted)">At this pace you'll spend about <b class="text-white">${fmt(s.spending*12)}</b> and save <b class="text-white">${fmt(Math.max(0,s.leftover*12))}</b> this year.${s.savingsRate<20?` Lifting your savings rate to 20% adds <b class="text-white">${fmt(Math.max(0,(s.income*0.2-s.leftover)*12))}/yr</b>.`:' Strong savings rate. Keep going.'}</p><a href="#app/simulator" class="mt-3 inline-block text-sm font-medium text-accent-purple hover:underline">Open Simulator →</a></div></div>`;
   }
   const gamify=c.gamify?`<div class="grid gap-4 lg:grid-cols-2">${missionsCompactHTML()}${levelXpHTML()}</div><div class="grid gap-4 lg:grid-cols-2">${weeklyCompactHTML()}${achievementsLatestHTML()}</div>`:'';
   const studentPerk='';
   const freePerk = plan==='free' ? `<a href="#app/plans" class="block glass-strong rounded-2xl p-5 transition hover:brightness-110" style="border:1px solid var(--border)"><div class="flex flex-wrap items-center justify-between gap-3"><div><h3 class="font-semibold">Unlock more with Pro & Premium</h3><p class="mt-1 text-sm" style="color:var(--muted)">Pro removes the goal limit and adds goal deletion. Premium adds the social feed, XP & levels, badges, themes and smart AI insights.</p></div><span class="btn btn-primary !py-2 text-sm shrink-0">See plans →</span></div></a>` : '';
-  return `<div class="dash-stack space-y-5 sm:space-y-6">${header}${heroStatsHTML(s)}${toolsRowHTML()}${goalsOverviewHTML()}${savingsOpportunitiesHTML()}${moneyHealthHTML(h)}${smartInsightsHTML()}${quizMonthlyPromptHTML()}${analytics}${freePerk}</div>`;
+  return `<div class="dash-stack space-y-5 sm:space-y-6">${header}${heroStatsHTML(s)}${toolsRowHTML()}${goalsOverviewHTML()}${recurringCompactHTML()}${savingsOpportunitiesHTML()}${moneyHealthHTML(h)}${smartInsightsHTML()}${quizMonthlyPromptHTML()}${analytics}${freePerk}</div>`;
 }
 
 function missionRow(m){
@@ -2669,7 +2760,7 @@ function goalCard(g){
   const remaining=g.target_amount?Math.max(0,g.target_amount-g.saved_amount):0;
   const mo=Math.max(0,Number(g.monthly_contribution)||0);
   const missionsBlock=c.gamify?`<div class="mt-5 border-t pt-4" style="border-color:var(--border)"><div class="mb-2.5 flex items-center justify-between"><p class="text-[11px] font-bold uppercase tracking-wider" style="color:var(--muted)">Missions · ${ms.length}</p><span class="text-[11px]" style="color:var(--muted)">${lvl.xp} XP${lvl.next?` · ${lvl.next-lvl.xp} to Lv.${lvl.idx+1}`:' · max'}</span></div>
-      <div class="space-y-2">${ms.length?ms.map(missionRow).join(''):`<p class="rounded-xl p-3 text-center text-xs" style="background:var(--glass);color:var(--muted)">No missions yet — add the weekly actions that drive this goal.</p>`}</div>
+      <div class="space-y-2">${ms.length?ms.map(missionRow).join(''):`<p class="rounded-xl p-3 text-center text-xs" style="background:var(--glass);color:var(--muted)">No missions yet. Add the weekly actions that drive this goal.</p>`}</div>
       <button class="btn btn-ghost mt-2.5 w-full !py-2 text-sm" data-action="newMission" data-goal="${g.id}">+ Add mission</button>
     </div>`:'';
   const statusChip=g.completed?`<span class="chip ok">✓ Completed</span>`:archived?`<span class="chip dim">📦 Archived</span>`:`<span class="chip"><span class="inline-block h-1.5 w-1.5 rounded-full" style="background:var(--jade2)"></span>Active</span>`;
@@ -2730,10 +2821,10 @@ function spendingHeatmapHTML(){
   // align start to the Monday of its week for clean columns
   const off=(start.getDay()+6)%7; start.setDate(start.getDate()-off);
   let cells='';const d=new Date(start);
-  while(d<=today){const k=d.toISOString().slice(0,10);const v=map[k]||0;const l=lvl(v);
+  while(d<=today){const k=dayISO(d);const v=map[k]||0;const l=lvl(v);
     cells+=`<div class="heat-cell" style="background:${bg(l)}" title="${k}: ${v>0?fmt(v):'no spend'}"></div>`;
     d.setDate(d.getDate()+1);}
-  const noSpendDays=(()=>{let c=0;const dd=new Date(start);while(dd<=today){if(!(map[dd.toISOString().slice(0,10)]>0))c++;dd.setDate(dd.getDate()+1);}return c;})();
+  const noSpendDays=(()=>{let c=0;const dd=new Date(start);while(dd<=today){if(!(map[dayISO(dd)]>0))c++;dd.setDate(dd.getDate()+1);}return c;})();
   const M='style="color:var(--muted)"';
   return `<div class="glass rounded-2xl p-4 sm:p-5">
     <div class="mb-3 flex items-center justify-between"><div><h3 class="font-bold">Spending consistency</h3><p class="text-xs" ${M}>${noSpendDays} no-spend days in the last ${WEEKS} weeks</p></div>
@@ -2749,9 +2840,13 @@ function habitsHTML(){
   // coffee/cafe habit by merchant
   const coffee=EXPENSES.filter(e=>in30(e)&&/coffee|cafe|café|starbucks|costa|espresso/i.test(e.merchant||''));
   if(coffee.length>=2){const tot=coffee.reduce((s,e)=>s+Number(e.amount),0);cards.push(['Coffee habit',fmt(tot),`${coffee.length} visits this month — about ${fmt(tot*12)}/year.`]);}
-  // subscriptions this month
-  const subs=EXPENSES.filter(e=>in30(e)&&e.category==='subscriptions').reduce((s,e)=>s+Number(e.amount),0);
-  if(subs>0)cards.push(['Subscriptions',fmt(subs),`Recurring monthly — ${fmt(subs*12)}/year. Review the ones you don't use.`]);
+  // real recurring commitments (detected across every category, not just the
+  // 'subscriptions' tag — a bus pass and a phone plan are commitments too)
+  const rec=detectRecurring().filter(r=>!r.dormant);
+  if(rec.length){
+    const perMonth=rec.reduce((s,r)=>s+r.monthly,0);
+    cards.push(['Recurring charges',fmt(perMonth),`${rec.length} repeat payment${rec.length===1?'':'s'}, about ${fmt(perMonth*12)} a year.`]);
+  }
   // biggest reducible category
   const wr=whatToReduce()[0];
   if(wr){const c=CATS[wr.cat]||CATS.other;cards.push([`Cut ${c.l} 20%`,fmt(Math.round(wr.save*12))+'/yr',`Trimming ${c.l} a little frees up real money over a year.`]);}
@@ -2782,6 +2877,183 @@ function goalAnalyticsHTML(){
   return `<div class="glass rounded-2xl p-4 sm:p-5"><h3 class="font-bold mb-1">Goal forecasts</h3>${rows}</div>`;
 }
 
+// ============================================================
+// CATEGORY BUDGETS
+// A monthly cap per spending category. localStorage is the instant cache;
+// profiles.budgets is the durable copy (see migration-2026-08-budgets.sql).
+// ============================================================
+function budgetsKey(){return 'goalify_budgets_'+uid();}
+function getBudgets(){
+  try{const local=JSON.parse(localStorage.getItem(budgetsKey())||'null');
+    if(local)return local;}catch(e){}
+  return (ME&&ME.budgets)||{};
+}
+async function setBudget(cat,limit){
+  const b={...getBudgets()};
+  if(limit>0)b[cat]=limit;else delete b[cat];
+  localStorage.setItem(budgetsKey(),JSON.stringify(b));
+  if(ME)ME.budgets=b;
+  if(!DEMO_MODE&&SESSION){
+    try{await sb.from('profiles').update({budgets:b}).eq('id',SESSION.user.id);}
+    catch(e){console.error('[Goalify] budget save failed:',e);}
+  }
+  return b;
+}
+// spend per category for the current month, budgeted categories only
+function budgetProgress(){
+  const b=getBudgets(),spent=monthCatSpend();
+  return Object.entries(b).map(([cat,limit])=>{
+    const used=spent[cat]||0;
+    return {cat,limit:Number(limit),used,pct:limit>0?Math.round(used/limit*100):0,over:used>limit};
+  }).sort((a,b2)=>b2.pct-a.pct);
+}
+function budgetsPanelHTML(){
+  const M='style="color:var(--muted)"';
+  const c=caps(ME?.plan||'free');
+  const rows=budgetProgress();
+  const used=rows.length,lim=c.budgetLimit;
+  const atLimit=lim!==-1&&used>=lim;
+  const unbudgeted=Object.keys(CATS).filter(k=>k!=='income'&&k!=='savings'&&!rows.some(r=>r.cat===k));
+  const bar=(r)=>{
+    const cat=CATS[r.cat]||CATS.other;
+    const w=Math.min(100,r.pct);
+    const col=r.over?'var(--coral)':r.pct>=80?'var(--gold2)':'var(--jade2)';
+    return `<div class="bud-row">
+      <div class="flex items-center justify-between gap-2">
+        <span class="flex items-center gap-2 min-w-0"><span>${cat.e}</span><span class="truncate text-sm font-medium">${cat.l}</span></span>
+        <span class="text-sm shrink-0"><b style="color:${col}">${fmt(r.used)}</b> <span ${M}>/ ${fmt(r.limit)}</span></span>
+      </div>
+      <div class="bud-track mt-1.5"><i style="width:${w}%;background:${col}"></i></div>
+      <div class="mt-1 flex items-center justify-between">
+        <span class="text-xs" style="color:${r.over?'var(--coral)':'var(--muted)'}">${r.over?`${fmt(r.used-r.limit)} over`:`${fmt(r.limit-r.used)} left · ${r.pct}%`}</span>
+        <button class="text-xs" ${M} data-action="rmBudget" data-cat="${r.cat}">Remove</button>
+      </div>
+    </div>`;
+  };
+  return `<div class="glass rounded-2xl p-4 sm:p-5">
+    <div class="flex items-center justify-between gap-2">
+      <div><h3 class="font-bold">Monthly budgets</h3><p class="text-xs" ${M}>Caps for this month, against what you have actually spent.</p></div>
+      ${lim===-1?'':`<span class="chip shrink-0">${used}/${lim}</span>`}
+    </div>
+    ${rows.length?`<div class="mt-4 grid gap-3">${rows.map(bar).join('')}</div>`
+      :`<p class="mt-3 text-sm" ${M}>No budgets yet. Pick a category you want to keep under control.</p>`}
+    ${atLimit
+      ? `<div class="mt-4">${upsellCard('Budget limit reached',`Free covers ${lim} categories. Pro lets you budget every one of them.`)}</div>`
+      : `<form id="budgetForm" class="mt-4 flex flex-wrap items-end gap-2">
+          <div class="flex-1 min-w-[8rem]"><label class="label">Category</label>
+            <select name="cat" class="input">${unbudgeted.map(k=>`<option value="${k}">${CATS[k].e} ${CATS[k].l}</option>`).join('')}</select></div>
+          <div class="w-28"><label class="label">Cap (€)</label><input name="limit" type="number" min="1" step="1" class="input" placeholder="100" required></div>
+          <button class="btn btn-primary btn-sm">Set budget</button>
+        </form>`}
+  </div>`;
+}
+
+// ============================================================
+// RECURRING CHARGES
+// Finds money that leaves every month whether you notice or not, by looking
+// for the same merchant charging a similar amount on a steady cadence. Pure
+// pattern matching over your own history — nothing is sent anywhere.
+// ============================================================
+const _median=(a)=>{const s=a.slice().sort((x,y)=>x-y);const m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2;};
+// merchants too generic to be a real commitment
+const RECUR_SKIP=new Set(['','various','online','other','misc','unknown','cash']);
+const CADENCES=[
+  {id:'weekly',      label:'Weekly',      lo:6,   hi:8,   perMonth:4.345},
+  {id:'fortnightly', label:'Every 2 weeks',lo:12, hi:17,  perMonth:2.172},
+  {id:'monthly',     label:'Monthly',     lo:25,  hi:35,  perMonth:1},
+  {id:'quarterly',   label:'Quarterly',   lo:85,  hi:96,  perMonth:1/3},
+  {id:'yearly',      label:'Yearly',      lo:350, hi:380, perMonth:1/12},
+];
+function detectRecurring(){
+  const byMerchant={};
+  EXPENSES.filter(isSpend).forEach(e=>{
+    const key=(e.merchant||'').trim().toLowerCase();
+    if(RECUR_SKIP.has(key))return;
+    (byMerchant[key]=byMerchant[key]||[]).push(e);
+  });
+  const found=[];
+  for(const list of Object.values(byMerchant)){
+    if(list.length<3)continue;                                  // need a real pattern, not a coincidence
+    const rows=list.slice().sort((a,b)=>new Date(a.spent_at)-new Date(b.spent_at));
+    const gaps=[];
+    for(let i=1;i<rows.length;i++)gaps.push((new Date(rows[i].spent_at)-new Date(rows[i-1].spent_at))/864e5);
+    const gap=_median(gaps);
+    const cadence=CADENCES.find(c=>gap>=c.lo&&gap<=c.hi);
+    if(!cadence)continue;
+    const amounts=rows.map(e=>Number(e.amount));
+    const typical=_median(amounts);
+    // amounts must be stable; a 20% band tolerates a price rise but not a
+    // merchant you simply happen to visit often
+    if(!amounts.every(a=>Math.abs(a-typical)<=Math.max(0.5,typical*0.2)))continue;
+    const latest=rows[rows.length-1];
+    const daysSince=Math.floor((Date.now()-new Date(latest.spent_at))/864e5);
+    const first=amounts[0],last=amounts[amounts.length-1];
+    found.push({
+      merchant:latest.merchant,category:latest.category,cadence,
+      amount:last,typical,monthly:typical*cadence.perMonth,
+      count:rows.length,lastAt:latest.spent_at,
+      nextAt:dayISO(new Date(new Date(latest.spent_at).getTime()+gap*864e5)),
+      roseBy:last>first*1.05?Math.round((last-first)/first*100):0,
+      dormant:daysSince>gap*1.8,
+    });
+  }
+  return found.sort((a,b)=>b.monthly-a.monthly);
+}
+function recurringView(){
+  const M='style="color:var(--muted)"';
+  const items=detectRecurring();
+  const monthly=items.filter(i=>!i.dormant).reduce((s,i)=>s+i.monthly,0);
+  const spend=EXPENSES.filter(isSpend);
+  const now=new Date(),mStart=new Date(now.getFullYear(),now.getMonth(),1);
+  const thisM=spend.filter(e=>new Date(e.spent_at)>=mStart).reduce((s,e)=>s+Number(e.amount),0);
+  const share=thisM>0?Math.round(monthly/thisM*100):0;
+  const dormant=items.filter(i=>i.dormant);
+  const risen=items.filter(i=>i.roseBy>0&&!i.dormant);
+
+  if(!items.length)return `<div class="mb-6"><h1 class="t-h1">Recurring charges</h1><p class="mt-1 text-sm" ${M}>Payments that repeat on a steady schedule.</p></div>
+    <div class="glass rounded-2xl p-8 text-center"><p class="t-h3">Nothing repeating yet</p><p class="mt-2 text-sm mx-auto max-w-sm" ${M}>Once the same merchant has charged you three times on a steady schedule, it shows up here with what it costs you a year.</p><a href="#app/analytics" class="btn btn-primary btn-sm mt-5">Log an expense</a></div>`;
+
+  const hero=`<div class="glass-strong rounded-2xl p-5 sm:p-6">
+    <div class="grid gap-4 sm:grid-cols-3">
+      <div class="a-metric"><p class="l">Committed each month</p><p class="v">${fmt(monthly)}</p><p class="i" ${M}>${items.filter(i=>!i.dormant).length} active charge${items.filter(i=>!i.dormant).length===1?'':'s'}</p></div>
+      <div class="a-metric"><p class="l">That's a year</p><p class="v" style="color:var(--gold2)">${fmt(monthly*12)}</p><p class="i" ${M}>before you spend on anything else</p></div>
+      <div class="a-metric"><p class="l">Share of spending</p><p class="v" style="color:${share>40?'var(--coral)':'var(--jade2)'}">${share}%</p><p class="i" ${M}>of this month's total</p></div>
+    </div>
+    ${(risen.length||dormant.length)?`<div class="mt-4 flex flex-wrap gap-2">
+      ${risen.map(i=>`<span class="chip" style="color:var(--coral)">${esc(i.merchant)} went up ${i.roseBy}%</span>`).join('')}
+      ${dormant.map(i=>`<span class="chip" ${M}>${esc(i.merchant)} hasn't charged recently</span>`).join('')}
+    </div>`:''}
+  </div>`;
+
+  const row=(i)=>{
+    const c=CATS[i.category]||CATS.other;
+    return `<div class="glass rounded-2xl p-4 flex items-center gap-3 ${i.dormant?'opacity-60':''}">
+      <span class="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-lg" style="background:color-mix(in srgb,${c.c} 18%,transparent)">${c.e}</span>
+      <div class="min-w-0 flex-1">
+        <p class="truncate font-semibold">${esc(i.merchant)}</p>
+        <p class="text-xs" ${M}>${i.cadence.label} · ${c.l} · seen ${i.count}×${i.dormant?' · last on '+i.lastAt:' · next around '+i.nextAt}</p>
+      </div>
+      <div class="text-right shrink-0">
+        <p class="font-bold">${fmt(i.amount)}</p>
+        <p class="text-xs" ${M}>${i.cadence.id==='monthly'?'a month':fmt(i.monthly)+'/mo'}</p>
+        ${i.roseBy?`<p class="text-xs" style="color:var(--coral)">▲ ${i.roseBy}%</p>`:''}
+      </div>
+    </div>`;
+  };
+
+  const lim=caps(ME?.plan||'free').recurringLimit;
+  const shown=lim===-1?items:items.slice(0,lim);
+  const hidden=items.length-shown.length;
+  const hiddenCost=items.slice(shown.length).filter(i=>!i.dormant).reduce((s,i)=>s+i.monthly,0);
+  return `<div class="mb-6"><h1 class="t-h1">Recurring charges</h1><p class="mt-1 text-sm" ${M}>Payments that repeat on a steady schedule, found in your own history.</p></div>
+    ${hero}
+    <div class="rec-list mt-5 grid gap-3">${shown.map(row).join('')}</div>
+    ${hidden>0?`<div class="mt-3">${upsellCard(
+      `${hidden} more repeat charge${hidden===1?'':'s'} hidden`,
+      `Free shows your ${lim} biggest. The rest add up to ${fmt(hiddenCost)} a month. Pro shows every one, plus price-rise alerts.`)}</div>`:''}
+    <p class="mt-4 text-xs" ${M}>Detected from ${spend.length} logged expenses. A charge appears once the same merchant has billed a similar amount three times on a steady cadence.</p>`;
+}
+
 function analyticsView(){
   const now=new Date(),mStart=new Date(now.getFullYear(),now.getMonth(),1),lastStart=new Date(now.getFullYear(),now.getMonth()-1,1);
   const spend=EXPENSES.filter(isSpend);
@@ -2804,19 +3076,20 @@ function analyticsView(){
         <div class="a-metric"><p class="l">Spent this month</p><p class="v">${fmt(thisM)}</p><p class="i" ${M}>${delta==null?'—':delta<=0?'▼ '+Math.abs(delta)+'% — trending down':'▲ '+delta+'% vs last month'}</p></div>
       </div>
     </div>
-    <p class="mt-4 text-sm" ${M}>${hv>=75?'Strong position — keep automating savings and you’ll hit goals early.':hv>=60?'Healthy money habits. Trimming your top category would push this higher.':hv>=40?'You’re on your way — lifting your savings rate above 20% is the fastest win.':'Focus on a small buffer first — even €50/week builds momentum.'}</p>
+    <p class="mt-4 text-sm" ${M}>${hv>=75?'Strong position. Keep automating savings and you’ll hit goals early.':hv>=60?'Healthy money habits. Trimming your biggest category would push this higher.':hv>=40?'You’re on your way — lifting your savings rate above 20% is the fastest win.':'Focus on a small buffer first — even €50/week builds momentum.'}</p>
   </div>`;
   const chartsRow=`<div class="grid gap-5 lg:grid-cols-5">
-    <div class="glass rounded-2xl p-4 sm:p-5 lg:col-span-3"><div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="font-bold">Spending trend</h3><p class="text-xs" ${M}>All logged expenses over time</p></div><div class="grid grid-cols-3 gap-1 rounded-xl p-1 text-xs sm:flex" style="background:var(--glass)">${[['month','Month'],['year','Year'],['five','5Y']].map((t,i)=>`<button data-action="tf" data-tf="${t[0]}" class="rounded-lg px-2.5 py-1.5 text-center font-semibold ${i===1?'text-white':''}" style="${i===1?'background:linear-gradient(90deg,var(--accent1),var(--accent2))':'color:var(--muted)'}">${t[1]}</button>`).join('')}</div></div><div style="height:220px;max-height:42vh"><canvas id="spendChart"></canvas></div></div>
+    <div class="glass rounded-2xl p-4 sm:p-5 lg:col-span-3"><div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><h3 class="font-bold">Spending trend</h3><p class="text-xs" ${M}>All logged expenses over time</p></div><div class="grid grid-cols-3 gap-1 rounded-xl p-1 text-xs sm:flex" style="background:var(--glass)">${timeframeTabs([['month','Month'],['year','Year'],['five','5Y']])}</div></div><div style="height:220px;max-height:42vh"><canvas id="spendChart"></canvas></div></div>
     <div class="glass rounded-2xl p-4 sm:p-5 lg:col-span-2"><h3 class="font-bold">Category breakdown</h3><p class="text-xs" ${M}>This month</p><div class="mt-3" style="height:200px"><canvas id="catChart"></canvas></div></div>
   </div>`;
-  const addForm=`<div class="glass rounded-2xl p-5 h-fit"><h3 class="font-bold">Add expense</h3><p class="text-xs" style="color:var(--muted)">Log it in seconds — analytics update instantly.</p><form id="expForm" class="mt-4 space-y-3"><div><label class="label">Amount (€)</label><input name="amount" type="number" step="0.01" min="0" class="input" placeholder="0.00" required></div><div><label class="label">Category</label><select name="category" class="input">${Object.keys(CATS).map(c=>`<option value="${c}">${CATS[c].e} ${CATS[c].l}</option>`).join('')}</select></div><div><label class="label">Merchant</label><input name="merchant" class="input" placeholder="optional"></div><div><label class="label">Date</label><input name="date" type="date" class="input" value="${todayISO()}"></div><button class="btn btn-primary w-full text-sm">+ Add expense</button></form></div>`;
+  const addForm=`<div class="glass rounded-2xl p-5 h-fit"><h3 class="font-bold">Add expense</h3><p class="text-xs" style="color:var(--muted)">Log it in seconds. Analytics update instantly.</p><form id="expForm" class="mt-4 space-y-3"><div><label class="label">Amount (€)</label><input name="amount" type="number" step="0.01" min="0" class="input" placeholder="0.00" required></div><div><label class="label">Category</label><select name="category" class="input">${Object.keys(CATS).map(c=>`<option value="${c}">${CATS[c].e} ${CATS[c].l}</option>`).join('')}</select></div><div><label class="label">Merchant</label><input name="merchant" class="input" placeholder="optional"></div><div><label class="label">Date</label><input name="date" type="date" class="input" value="${todayISO()}"></div><button class="btn btn-primary w-full text-sm">+ Add expense</button></form></div>`;
   const txList=`<div class="glass rounded-2xl p-5 lg:col-span-2"><div class="flex items-center justify-between"><h3 class="font-bold">Recent transactions</h3>${EXPENSES.length?`<span class="chip">${EXPENSES.length} total</span>`:''}</div>
     ${EXPENSES.length===0?`<div class="empty-wrap mt-4 !py-10"><div class="empty-orb" style="height:3.2rem;width:3.2rem;font-size:1.5rem">🧾</div><p class="mt-3 text-sm font-bold">No transactions yet</p><p class="mt-1 text-xs" style="color:var(--muted)">Add your first expense and your analytics come alive.</p></div>`
     :`<div class="mt-3 max-h-[400px] space-y-1 overflow-y-auto pr-1">${EXPENSES.slice(0,50).map(e=>{const m=CATS[e.category]||CATS.other,inc=e.category==='income';return `<div class="tx-row"><span class="tx-ico">${m.e}</span><div class="min-w-0 flex-1"><p class="truncate text-sm font-semibold">${esc(e.merchant||m.l)}</p><p class="text-xs" style="color:var(--muted)">${m.l} · ${e.spent_at}</p></div><span class="text-sm font-bold ${inc?'text-emerald-400':''}">${inc?'+':'-'}${fmt(e.amount)}</span><button data-action="delExp" data-id="${e.id}" class="icon-btn danger" title="Delete">🗑</button></div>`;}).join('')}</div>`}</div>`;
   return `<div class="dash-stack space-y-5 sm:space-y-6">
-    <div class="page-head"><div><h1 class="page-h1">Analytics</h1><p class="page-sub">Your money, understood — health, habits and what to do next.</p></div></div>
+    <div class="page-head"><div><h1 class="page-h1">Analytics</h1><p class="page-sub">Your money, understood: health, habits, and what to do next.</p></div></div>
     ${hero}
+    ${budgetsPanelHTML()}
     ${spendingHeatmapHTML()}
     ${chartsRow}
     <div class="grid gap-5 lg:grid-cols-2">${habitsHTML()}${goalAnalyticsHTML()}</div>
@@ -2898,7 +3171,7 @@ function challengesView(){
   const joined=chalState(),joinedKeys=joined.map(c=>c.key);
   const cats=CHALLENGES.filter(t=>!CHAL_FILTER||t.days===CHAL_FILTER);
   const filters=[[0,'All'],[1,'1 day'],[7,'7 days'],[14,'14 days']];
-  return `<div class="space-y-6"><div><h1 class="text-3xl font-bold">Challenges</h1><p class="mt-1 text-sm text-slate-400">Real challenges with proof — XP is granted only after your evidence is reviewed. No instant completion.</p></div>
+  return `<div class="space-y-6"><div><h1 class="text-3xl font-bold">Challenges</h1><p class="mt-1 text-sm text-slate-400">Real challenges with proof. XP is granted only after your evidence is reviewed. No instant completion.</p></div>
   <div class="grid gap-6 lg:grid-cols-2">
     <div class="glass-strong rounded-2xl p-6 flex flex-wrap items-center justify-between gap-4"><div class="flex items-center gap-4"><span class="flex h-14 w-14 items-center justify-center rounded-2xl text-xl font-extrabold text-white" style="background:linear-gradient(135deg,var(--accent1),var(--accent2))">${level}</span><div><p class="font-semibold">Level ${level}</p><p class="text-sm text-slate-400">${ME.xp||0} XP total</p></div></div><div class="w-full sm:w-56"><div class="mb-1 flex justify-between text-xs text-slate-400"><span>${inLvl} XP</span><span>100 XP</span></div><div class="h-2.5 overflow-hidden rounded-full" style="background:var(--glass)"><div class="progress-fill h-full rounded-full" style="width:${inLvl}%;background:linear-gradient(90deg,var(--accent1),var(--accent2))"></div></div></div></div>
     <div class="glass-strong rounded-2xl p-6 flex flex-wrap items-center justify-between gap-4"><div class="flex items-center gap-4"><span class="text-4xl">🔥</span><div><p class="text-2xl font-extrabold">${st.count} day${st.count===1?'':'s'}</p><p class="text-sm text-slate-400">Check-in streak</p></div></div><button class="btn ${checkedToday?'btn-ghost':'btn-primary'} !py-2.5 text-sm" data-action="checkIn" ${checkedToday?'disabled':''}>${checkedToday?'✓ Checked in today':'Check in (+10 XP)'}</button></div>
@@ -3006,7 +3279,7 @@ function socialView(){
       <div class="glass rounded-2xl p-5"><h3 class="font-bold">Friends' activity</h3><div class="empty-wrap mt-3 !py-8"><div class="empty-orb" style="height:3rem;width:3rem;font-size:1.3rem">👥</div><p class="mt-2 text-sm font-semibold">Your circle is empty (for now)</p><p class="mt-1 text-xs" ${M}>Follow people once accounts go live and their wins appear here.</p></div></div>`;
   }
   return `<div class="dash-stack space-y-5 sm:space-y-6">
-    <div class="page-head"><div><h1 class="page-h1">Social</h1><p class="page-sub">Your public presence, rankings and community — friends make saving stick.</p></div>${tabs}</div>
+    <div class="page-head"><div><h1 class="page-h1">Social</h1><p class="page-sub">Your public presence, rankings and community. Friends make saving stick.</p></div>${tabs}</div>
     ${body}</div>`;
 }
 
@@ -3257,7 +3530,7 @@ function paymentSuccessView(plan,cycle){
   const cfg=PAY_SUCCESS[plan]||PAY_SUCCESS.pro, c=cfg.color;
   const now=new Date(),renew=new Date(now);
   if(cycle==='yearly')renew.setFullYear(renew.getFullYear()+1); else renew.setMonth(renew.getMonth()+1);
-  const fmtD=d=>{try{return d.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});}catch(e){return d.toISOString().slice(0,10);}};
+  const fmtD=d=>{try{return d.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});}catch(e){return dayISO(d);}};
   const price=PRICING[plan]?(cycle==='yearly'?'€'+PRICING[plan].yr+'/year':'€'+PRICING[plan].mo+'/month'):'';
   const feats=cfg.feats.map(f=>`<div class="flex items-center gap-2.5 rounded-xl px-3 py-2.5" style="background:var(--glass)"><span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white" style="background:${c}">✓</span><span class="text-sm font-medium">${esc(f)}</span></div>`).join('');
   const btns=cfg.btns.map((b,i)=>`<a href="${b[1]}" class="btn ${i===0?'btn-primary':'btn-ghost'} w-full sm:w-auto sm:px-6 text-sm">${esc(b[0])}</a>`).join('');
@@ -3304,7 +3577,7 @@ function paymentSuccessView(plan,cycle){
 }
 function plansView(){
   const cur=ME.plan;
-  return `<div class="space-y-6"><div><h1 class="text-3xl font-bold">Plans & Pricing</h1><p class="mt-1 text-sm text-slate-400">Pick the plan that fits you. You're on <b class="text-white">${PLANS[cur].name}</b>. Every paid plan includes a <b class="text-white">1-week free trial</b> — cancel anytime.</p></div>
+  return `<div class="space-y-6"><div><h1 class="text-3xl font-bold">Plans & Pricing</h1><p class="mt-1 text-sm text-slate-400">Pick the plan that fits you. You're on <b class="text-white">${PLANS[cur].name}</b>. Every paid plan includes a <b class="text-white">1-week free trial</b>, cancel anytime.</p></div>
   <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">${['free','pro'].map(id=>planCard(id,cur)).join('')}<div class="glass rounded-2xl p-6 flex flex-col items-center justify-center text-center" style="opacity:.8"><h3 class="text-lg font-semibold">Premium &amp; Business</h3><p class="mt-2 text-sm" style="color:var(--muted)">More power for power-savers and teams.</p><span class="chip mt-3">Coming soon</span></div></div>
   <div class="glass rounded-2xl p-5 text-sm text-slate-400"><b class="text-white">Invite friends:</b> 25 invites unlocks <b class="text-white">3 months of Pro free</b> — see <a href="#app/rewards" class="text-accent-purple hover:underline">Rewards</a>.</div>
   ${DEMO_MODE?`<p class="text-xs text-slate-500">Demo: selecting a plan previews how that tier looks — no payment is taken. Real billing activates when the backend goes live.</p>`:''}
@@ -3417,7 +3690,7 @@ function storeView(){
     ${lockBanner}
     <div class="seg" role="tablist"><button class="seg-btn on" role="tab">Cosmetics</button><button class="seg-btn" role="tab" disabled style="opacity:.5">Boosts · soon</button><button class="seg-btn" role="tab" disabled style="opacity:.5">Featured · soon</button></div>
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">${STORE_ITEMS.map(card).join('')}</div>
-    <p class="text-xs" style="color:var(--muted)">GoalCoins are earned in-app — never bought. ${free?'Free plan earns up to 80 GC/week.':plan==='pro'?'Pro earns ×1.5 + 200 GC monthly stipend.':'Premium earns ×2 + 600 GC monthly stipend.'}</p>
+    <p class="text-xs" style="color:var(--muted)">GoalCoins are earned in-app, never bought. ${free?'Free plan earns up to 80 GC/week.':plan==='pro'?'Pro earns ×1.5 + 200 GC monthly stipend.':'Premium earns ×2 + 600 GC monthly stipend.'}</p>
   </div>`;
 }
 async function refEnsureCount(){
@@ -3441,7 +3714,7 @@ function rewardsView(){
   const prog=Math.min(100,Math.round(invited/nextTier[0]*100));
   const earned=REWARD_TIERS.filter(t=>invited>=t[0]);
   const tierRows=REWARD_TIERS.map(t=>{const done=invited>=t[0];return `<div class="flex items-center gap-3 rounded-xl p-3" style="background:var(--glass);${done?'box-shadow:0 0 0 1px var(--accent2)':''}"><span class="text-xl">${done?'✅':'🎁'}</span><div class="flex-1"><p class="text-sm font-medium">${t[0]} friends</p><p class="text-[11px]" style="color:var(--muted)">${t[1]}</p></div>${done?'<span class="text-xs text-emerald-400 font-semibold">Earned</span>':`<span class="text-xs" style="color:var(--muted)">${invited}/${t[0]}</span>`}</div>`;}).join('');
-  return `<div class="space-y-6"><div><h1 class="text-3xl font-bold">🎁 Rewards</h1><p class="mt-1 text-sm text-slate-400">Invite friends to Goalify and earn free Pro & Premium. Real sign-ups only — verified by email.</p></div>
+  return `<div class="space-y-6"><div><h1 class="text-3xl font-bold">🎁 Rewards</h1><p class="mt-1 text-sm text-slate-400">Invite friends to Goalify and earn free Pro & Premium. Real sign-ups only, verified by email.</p></div>
   ${giftSectionHTML()}
   <div class="glass-strong rounded-2xl p-6">
     <div class="flex flex-wrap items-end justify-between gap-3"><div><p class="text-[11px] uppercase tracking-widest" style="color:var(--muted)">Progress to next reward</p><h2 class="mt-1 text-2xl font-bold">${invited} / ${nextTier[0]} friends invited</h2><p class="text-sm gtext font-semibold">Reward: ${nextTier[1]}</p></div><div class="text-right"><p class="text-3xl font-extrabold gtext">${prog}%</p></div></div>
@@ -3507,13 +3780,13 @@ function settingsView(){
     ${pm?`<div class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl p-4" style="background:var(--glass);border:1px solid var(--border)"><div class="flex items-center gap-3"><span class="flex h-9 w-14 items-center justify-center rounded-md text-[10px] font-bold tracking-wide" style="background:linear-gradient(135deg,var(--accent1),var(--accent2));color:#fff">${esc(pm.brand.slice(0,8))}</span><div><p class="text-sm font-bold">${esc(pm.brand)} •••• ${esc(pm.last4)}</p><p class="text-[11px]" style="color:var(--muted)">Expires ${esc(pm.exp)}</p></div></div><button class="btn btn-ghost !py-1.5 text-sm" data-action="removePm">Remove</button></div>`
       :`<div class="mt-4 rounded-xl p-4 text-center text-sm" style="background:var(--glass);border:1px dashed var(--border);color:var(--muted)">No payment method saved.</div>
     <button class="btn btn-primary mt-3 text-sm" data-action="togglePmForm">+ Add payment method</button>
-    <div id="pmForm" class="hidden mt-3"><div class="grid gap-3 sm:grid-cols-3"><select id="pmBrand" class="input">${['Visa','Mastercard','Amex','Other'].map(b=>`<option>${b}</option>`).join('')}</select><input id="pmLast4" class="input" maxlength="4" inputmode="numeric" placeholder="Last 4 digits"><input id="pmExp" class="input" maxlength="5" placeholder="MM/YY"></div><div class="mt-3 flex gap-2"><button class="btn btn-primary text-sm" data-action="savePm">Save card</button><button class="btn btn-ghost text-sm" data-action="togglePmForm">Cancel</button></div><p class="mt-2 text-[11px]" style="color:var(--muted)">Only the last 4 digits are stored for display — never the full card number or CVC.</p></div>`}
+    <div id="pmForm" class="hidden mt-3"><div class="grid gap-3 sm:grid-cols-3"><select id="pmBrand" class="input">${['Visa','Mastercard','Amex','Other'].map(b=>`<option>${b}</option>`).join('')}</select><input id="pmLast4" class="input" maxlength="4" inputmode="numeric" placeholder="Last 4 digits"><input id="pmExp" class="input" maxlength="5" placeholder="MM/YY"></div><div class="mt-3 flex gap-2"><button class="btn btn-primary text-sm" data-action="savePm">Save card</button><button class="btn btn-ghost text-sm" data-action="togglePmForm">Cancel</button></div><p class="mt-2 text-[11px]" style="color:var(--muted)">Only the last 4 digits are stored for display, never the full card number or CVC.</p></div>`}
   </div>
   <div class="grid gap-5 sm:grid-cols-2">
     <div class="glass rounded-2xl p-6"><h2 class="text-lg font-bold">Subscription</h2><p class="mt-1 text-sm" style="color:var(--muted)">Current: <b style="color:var(--text)">${PLANS[p.plan].name}</b> ${planBadge(p.plan)}</p>${p.plan!=='free'?`<p class="mt-3 text-sm text-emerald-400">You have ${PLANS[p.plan].name} access.</p>`:`<a href="#app/plans" class="btn btn-primary mt-4 text-sm">See plans</a>`}</div>
     <div class="glass rounded-2xl p-6"><h2 class="text-lg font-bold">Redeem a code</h2><p class="mt-1 text-sm" style="color:var(--muted)">Have a promo code? Activate your plan instantly.</p><div class="mt-4 flex gap-2"><input id="promoInput" class="input" placeholder="ENTER-CODE-HERE" style="text-transform:uppercase"><button class="btn btn-primary text-sm shrink-0" data-action="redeemPromo">Redeem</button></div></div>
   </div>
-  <div id="set-privacy" class="set-card glass rounded-2xl p-6"><h2 class="text-lg font-bold">Privacy & data</h2><p class="mt-1 text-sm" style="color:var(--muted)">Your data belongs to you — export it anytime.</p><div class="mt-4 flex flex-wrap gap-2"><button class="btn btn-ghost text-sm" data-action="export">⬇ Export my data</button><a href="mailto:support@goalify.app" class="btn btn-ghost text-sm">🛟 Support Center</a></div></div>
+  <div id="set-privacy" class="set-card glass rounded-2xl p-6"><h2 class="text-lg font-bold">Privacy & data</h2><p class="mt-1 text-sm" style="color:var(--muted)">Your data belongs to you. Export it anytime.</p><div class="mt-4 flex flex-wrap gap-2"><button class="btn btn-ghost text-sm" data-action="export">${ICON('download','ic-sm')} Export as JSON</button><button class="btn btn-ghost text-sm" data-action="exportCsv">${ICON(caps(ME?.plan||'free').csvExport?'download':'lock','ic-sm')} Spreadsheet (CSV)${caps(ME?.plan||'free').csvExport?'':' · Pro'}</button><a href="mailto:support@goalify.app" class="btn btn-ghost text-sm">🛟 Support Center</a></div></div>
   <div id="set-admin" class="set-card glass rounded-2xl p-6"><div class="flex items-center justify-between"><h2 class="text-lg font-bold">Admin access</h2>${isDemoAdmin()?'<span class="chip gold">Signed in</span>':''}</div>${isDemoAdmin()?`<p class="mt-1 text-sm" style="color:var(--muted)">You're signed in as admin.</p><div class="mt-3 flex gap-2"><a href="#admin" class="btn btn-primary text-sm">Open admin dashboard</a><button class="btn btn-ghost text-sm" data-action="adminLogout">Sign out admin</button></div>`:`<p class="mt-1 text-sm" style="color:var(--muted)">Enter the admin access code to open the admin dashboard.</p><div class="mt-3 flex gap-2"><input id="adminInput" type="password" class="input" placeholder="Access code"><button class="btn btn-primary text-sm shrink-0" data-action="adminLogin">Enter</button></div>`}</div>
   <div class="glass rounded-2xl p-6"><h2 class="text-lg font-bold">Restart onboarding quiz</h2><p class="mt-1 text-sm" style="color:var(--muted)">Retake the spending quiz and rebuild your money profile. This resets only your onboarding answers and spending preferences — your account, goals and progress stay intact.</p><button class="btn btn-ghost mt-4 text-sm" data-action="restartQuiz">Restart Quiz</button></div>
   <div id="set-support" class="set-card glass rounded-2xl p-6"><h2 class="text-lg font-bold">Support</h2>
@@ -3565,13 +3838,16 @@ async function adminView(){
 const isSpend=(e)=>e.category!=='income'&&e.category!=='savings';
 // timeframes: 'month' (last 30 days), 'year' (12 months), 'five' (5 years)
 function series(tf){const spend=EXPENSES.filter(isSpend),now=new Date(),out=[];
-  if(tf==='month'||tf==='daily'){for(let i=29;i>=0;i--){const d=new Date(now);d.setDate(now.getDate()-i);const k=d.toISOString().slice(0,10);out.push([(i%5===0)?d.toLocaleDateString('en-IE',{day:'numeric',month:'short'}):'',spend.filter(e=>e.spent_at===k).reduce((s,e)=>s+Number(e.amount),0)]);}}
+  if(tf==='month'||tf==='daily'){for(let i=29;i>=0;i--){const d=new Date(now);d.setDate(now.getDate()-i);const k=dayISO(d);out.push([(i%5===0)?d.toLocaleDateString('en-IE',{day:'numeric',month:'short'}):'',spend.filter(e=>e.spent_at===k).reduce((s,e)=>s+Number(e.amount),0)]);}}
   else if(tf==='five'||tf==='yearly'){for(let i=4;i>=0;i--){const y=now.getFullYear()-i;out.push([''+y,spend.filter(e=>new Date(e.spent_at).getFullYear()===y).reduce((s,e)=>s+Number(e.amount),0)]);}}
   else{for(let i=11;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1),e=new Date(now.getFullYear(),now.getMonth()-i+1,0);out.push([d.toLocaleDateString('en-IE',{month:'short'}),spend.filter(x=>{const dd=new Date(x.spent_at);return dd>=d&&dd<=e;}).reduce((s,x)=>s+Number(x.amount),0)]);}}
   return out;}
 // light animation, no constant motion
 function chartOpts(){return {responsive:true,maintainAspectRatio:false,animation:false,resizeDelay:150,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt(c.parsed.y)}}},scales:{x:{grid:{display:false},ticks:{color:'#64748b',font:{size:10},maxRotation:0,autoSkip:true}},y:{grid:{color:'rgba(128,128,128,.10)'},ticks:{color:'#64748b',font:{size:10}}}}};}
-function drawSpend(tf){const el=$('#spendChart');if(!el)return;const data=series(tf),ctx=el.getContext('2d');const g=ctx.createLinearGradient(0,0,0,260);g.addColorStop(0,'rgba(108,143,168,.42)');g.addColorStop(1,'rgba(61,111,142,.02)');if(charts.spend)charts.spend.destroy();charts.spend=new Chart(ctx,{type:'line',data:{labels:data.map(d=>d[0]),datasets:[{data:data.map(d=>d[1]),borderColor:'#6C8FA8',backgroundColor:g,fill:true,tension:.4,pointRadius:0,borderWidth:2.5}]},options:chartOpts()});}
+function drawSpend(tf){const el=$('#spendChart');if(!el)return;
+  // clamp here too, so the free history window holds no matter which path asks
+  if(caps(ME?.plan||'free').history==='month')tf='month';
+  const data=series(tf),ctx=el.getContext('2d');const g=ctx.createLinearGradient(0,0,0,260);g.addColorStop(0,'rgba(108,143,168,.42)');g.addColorStop(1,'rgba(61,111,142,.02)');if(charts.spend)charts.spend.destroy();charts.spend=new Chart(ctx,{type:'line',data:{labels:data.map(d=>d[0]),datasets:[{data:data.map(d=>d[1]),borderColor:'#6C8FA8',backgroundColor:g,fill:true,tension:.4,pointRadius:0,borderWidth:2.5}]},options:chartOpts()});}
 function drawCat(){const el=$('#catChart');if(!el)return;const now=new Date(),m=new Date(now.getFullYear(),now.getMonth(),1),map={};EXPENSES.filter(e=>isSpend(e)&&new Date(e.spent_at)>=m).forEach(e=>map[e.category]=(map[e.category]||0)+Number(e.amount));const keys=Object.keys(map);if(!keys.length){el.insertAdjacentHTML('afterend','<p class="py-8 text-center text-sm text-slate-400">No spending this month yet.</p>');el.style.display='none';return;}charts.cat=new Chart(el,{type:'doughnut',data:{labels:keys.map(k=>(CATS[k]||CATS.other).l),datasets:[{data:keys.map(k=>map[k]),backgroundColor:keys.map(k=>(CATS[k]||CATS.other).c),borderWidth:0}]},options:{plugins:{legend:{position:'right',labels:{color:'#94a3b8',font:{size:11},boxWidth:12}}},cutout:'62%'}});}
 function runSim(){const inc=+($('#simIncome')?.value||0),exp=+($('#simExp')?.value||0),goal=+($('#simGoal')?.value||0),rate=+($('#simRate')?.value||0);
   if($('#simIncomeV'))$('#simIncomeV').textContent=fmt(inc);if($('#simExpV'))$('#simExpV').textContent=fmt(exp);if($('#simGoalV'))$('#simGoalV').textContent=fmt(goal);if($('#simRateV'))$('#simRateV').textContent=rate+'%';
@@ -3746,14 +4022,14 @@ async function render(){
     // Onboarding already requires a goal. Never force completed users back to goal creation —
     // the dashboard shows a friendly empty state + "Create goal" if a goal failed to load.
     const route2=route2base;
-    const views={dashboard:dashboardView,goals:goalsView,groups:groupsView,friends:friendsView,analytics:analyticsView,simulator:simulatorView,spendcalc:spendingCalcView,challenges:challengesView,social:socialView,inbox:inboxView,profile:profileView,store:storeView,goalverse:goalverseView,rewards:rewardsView,plans:plansView,settings:settingsView};
+    const views={dashboard:dashboardView,goals:goalsView,groups:groupsView,friends:friendsView,analytics:analyticsView,recurring:recurringView,simulator:simulatorView,spendcalc:spendingCalcView,challenges:challengesView,social:socialView,inbox:inboxView,profile:profileView,store:storeView,goalverse:goalverseView,rewards:rewardsView,plans:plansView,settings:settingsView};
     const sameRoute=window._lastAppRoute===route2;window._lastAppRoute=route2;
     const keepY=sameRoute?window.scrollY:0;
     root.innerHTML=shell(route2,(views[route2]||dashboardView)());
     root.classList.toggle('no-anim',sameRoute);
     if(sameRoute){window.scrollTo(0,keepY);}else{window.scrollTo(0,0);}
-    if(route2==='dashboard'&&c.engage){drawSpend('year');drawCat();}
-    if(route2==='analytics'){drawSpend('year');drawCat();}
+    if(route2==='dashboard'&&c.engage){drawSpend(defaultTF());drawCat();}
+    if(route2==='analytics'){drawSpend(defaultTF());drawCat();}
     if(route2==='simulator'){runSim();}
     if(route2==='spendcalc'){setTimeout(updateSpendCalc,0);}
     if(route2==='groups'){gEnsureLoaded();}else{GROUP_OPEN=null;GROUP_NEW=false;}
@@ -3807,7 +4083,7 @@ const BIZ_SPECS={
 };
 
 function defaultBiz(){
-  const d=(off)=>{const x=new Date();x.setDate(x.getDate()+off);return x.toISOString().slice(0,10);};
+  const d=(off)=>{const x=new Date();x.setDate(x.getDate()+off);return dayISO(x);};
   const mk=(biz,pfx,arr)=>arr.map((r,i)=>({id:pfx+'_'+biz+'_'+i,biz,...r}));
   const businesses=[
     {id:'b1',name:'Lumen Bistro',logo:'🍽️',industry:'Restaurant',founded:2019,cash:48000,revenue:45000},
@@ -4364,7 +4640,23 @@ document.addEventListener('click',async(e)=>{
     else if(act==='proofChal'){openProofModal(a.getAttribute('data-key'));}
     else if(act==='reviewChal'){const k=a.getAttribute('data-key');const arr=chalState();const c=arr.find(x=>x.key===k);if(c){c.status='pending';setChalState(arr);}toast('Submitted for review — XP is granted after approval ⏳');render();}
     else if(act==='leaveChal'){const k=a.getAttribute('data-key');setChalState(chalState().filter(c=>c.key!==k));toast('Left challenge');render();}
-    else if(act==='export'){let g=GOALS,x=EXPENSES;if(!DEMO_MODE){const u=SESSION?.user?.id;[{data:g},{data:x}]=await Promise.all([sb.from('goals').select('*').eq('user_id',u),sb.from('expenses').select('*').eq('user_id',u)]);}const blob=new Blob([JSON.stringify({profile:ME,goals:g,expenses:x},null,2)],{type:'application/json'});const u=URL.createObjectURL(blob);const el=document.createElement('a');el.href=u;el.download='goalify-data.json';el.click();URL.revokeObjectURL(u);}
+    else if(act==='export'){let g=GOALS,x=EXPENSES;if(!DEMO_MODE){const u=SESSION?.user?.id;[{data:g},{data:x}]=await Promise.all([sb.from('goals').select('*').eq('user_id',u),sb.from('expenses').select('*').eq('user_id',u)]);}const blob=new Blob([JSON.stringify({profile:ME,goals:g,expenses:x},null,2)],{type:'application/json'});const u=URL.createObjectURL(blob);const el=document.createElement('a');el.href=u;el.download='goalify-data.json';el.click();URL.revokeObjectURL(u);toast('Exported goalify-data.json');}
+    else if(act==='rmBudget'){await setBudget(a.getAttribute('data-cat'),0);toast('Budget removed');render();}
+    else if(act==='exportCsv'){
+      if(!caps(ME?.plan||'free').csvExport){toast('Spreadsheet export is a Pro feature','err');location.hash='#app/plans';return;}
+      let x=EXPENSES;
+      if(!DEMO_MODE){const u=SESSION?.user?.id;({data:x}=await sb.from('expenses').select('*').eq('user_id',u).order('spent_at',{ascending:false}));}
+      const cell=(v)=>{const s=v==null?'':String(v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+      const head=['Date','Amount','Currency','Category','Merchant'];
+      const rows=(x||[]).map(e=>[e.spent_at,Number(e.amount).toFixed(2),ME?.currency||'EUR',(CATS[e.category]||{}).l||e.category,e.merchant||'']);
+      // Leading BOM (written as an escape, not a literal invisible character,
+      // so no editor or tool can silently strip it) — without it Excel reads
+      // the file as ANSI and mangles accented merchant names.
+      const csv='\ufeff'+[head,...rows].map(r=>r.map(cell).join(',')).join('\r\n');
+      const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const u2=URL.createObjectURL(blob);
+      const el2=document.createElement('a');el2.href=u2;el2.download=`goalify-expenses-${todayISO()}.csv`;el2.click();URL.revokeObjectURL(u2);
+      toast(`Exported ${rows.length} expense${rows.length===1?'':'s'} to CSV`);
+    }
     else if(act==='rmAvatar'){ME.avatar_url=null;localStorage.removeItem('goalify_avatar_'+uid());if(!DEMO_MODE){await sb.from('profiles').update({avatar_url:null}).eq('id',SESSION.user.id);}toast('Photo removed');render();}
     else if(act==='rmBanner'){ME.banner_url=null;localStorage.removeItem('goalify_banner_'+uid());if(!DEMO_MODE){await sb.from('profiles').update({banner_url:null}).eq('id',SESSION.user.id).catch(()=>{});}toast('Banner removed');render();}
     else if(act==='saveNotif'){const prefs={};document.querySelectorAll('[data-notif]').forEach(i=>prefs[i.getAttribute('data-notif')]=i.checked);if(DEMO_MODE){DEMO_ME.notification_prefs=prefs;toast('Preferences saved (demo)');}else{await sb.from('profiles').update({notification_prefs:prefs}).eq('id',SESSION.user.id);toast('Preferences saved');}}
@@ -4570,6 +4862,14 @@ document.addEventListener('submit',async(e)=>{
     }
     else if(f.id==='forgotForm'){const fd=new FormData(f);if(DEMO_MODE){toast('Reset link sent — check your email (demo).');location.hash='#login';return;}const {error}=await sb.auth.resetPasswordForEmail(fd.get('email'),{redirectTo:location.origin+location.pathname+'#reset'});if(error)return toast(error.message,'err');toast('Reset link sent — check your email.');}
     else if(f.id==='resetForm'){const fd=new FormData(f);if(fd.get('password')!==fd.get('confirm'))return toast('Passwords do not match','err');const {error}=await sb.auth.updateUser({password:fd.get('password')});if(error)return toast(error.message,'err');toast('Password updated');location.hash='#app/dashboard';}
+    else if(f.id==='budgetForm'){const fd=new FormData(f);
+      const cat=fd.get('cat'),limit=Math.round(+fd.get('limit')||0);
+      if(limit<=0)return toast('Enter a cap above zero','err');
+      const c=caps(ME?.plan||'free');
+      if(c.budgetLimit!==-1&&Object.keys(getBudgets()).length>=c.budgetLimit){
+        toast('Free covers '+c.budgetLimit+' budgets. Pro removes the cap.','err');location.hash='#app/plans';return;}
+      await setBudget(cat,limit);
+      toast((CATS[cat]||CATS.other).l+' capped at '+fmt(limit)+'/month');render();return;}
     else if(f.id==='expForm'){const fd=new FormData(f);if(DEMO_MODE){const exp={id:'e'+Date.now(),user_id:'demo',amount:+fd.get('amount'),category:fd.get('category'),merchant:fd.get('merchant'),spent_at:fd.get('date')||todayISO()};DEMO_EXPENSES.unshift(exp);toast('Expense added (demo)');render();}else{await sb.from('expenses').insert({user_id:SESSION.user.id,amount:+fd.get('amount'),category:fd.get('category'),merchant:fd.get('merchant'),spent_at:fd.get('date')||todayISO()});toast('Expense added');render();}}
     else if(f.id==='profForm'){const fd=new FormData(f);if(DEMO_MODE){Object.assign(DEMO_ME,{first_name:fd.get('first_name'),last_name:fd.get('last_name'),username:fd.get('username'),country:fd.get('country'),bio:fd.get('bio'),monthly_income:+fd.get('monthly_income')||0,currency:fd.get('currency')});toast('Profile saved (demo)');render();}else{await sb.from('profiles').update({first_name:fd.get('first_name'),last_name:fd.get('last_name'),username:fd.get('username'),country:fd.get('country'),bio:fd.get('bio'),monthly_income:+fd.get('monthly_income')||0,currency:fd.get('currency')}).eq('id',SESSION.user.id);await loadProfile();toast('Profile saved');render();}}
     else if(f.id==='pwForm'){if(DEMO_MODE){toast('Password change is not available in demo mode','err');return;}const fd=new FormData(f);if(!fd.get('password'))return;if(fd.get('password')!==fd.get('confirm'))return toast('Passwords do not match','err');const {error}=await sb.auth.updateUser({password:fd.get('password')});if(error)return toast(error.message,'err');toast('Password updated');f.reset();}
